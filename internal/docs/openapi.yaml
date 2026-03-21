@@ -1,0 +1,455 @@
+openapi: 3.1.0
+info:
+  title: zoekt-server API
+  version: 1.0.0
+  description: |
+    Code search server combining [Zoekt](https://github.com/sourcegraph/zoekt)
+    with MCP (Model Context Protocol) for LLM tool use.
+
+    Includes the upstream Zoekt search/list API, file viewer, reindexing, and MCP endpoints.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: Search
+    description: Code search and repository listing
+  - name: Files
+    description: File content retrieval
+  - name: Reindex
+    description: On-demand repository reindexing
+  - name: MCP
+    description: Model Context Protocol endpoints
+  - name: System
+    description: Health checks and metadata
+
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+        "500":
+          description: Server is unhealthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "not ready: shard loading"
+
+  /api/search:
+    post:
+      tags: [Search]
+      summary: Search code
+      operationId: search
+      description: |
+        Full-text code search across all indexed repositories.
+
+        Query syntax:
+        - Multiple terms are AND'd: `class needle`
+        - `or` for alternatives: `thread or needle`
+        - Quotes for phrases: `"class Needle"`
+        - `-` to negate: `needle -hay`
+        - `r:` or `repo:` to filter by repository
+        - `f:` or `file:` to filter by file path (regex)
+        - `lang:` to filter by language
+        - `sym:` to search symbol definitions
+        - `case:yes` for case-sensitive search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Q]
+              properties:
+                Q:
+                  type: string
+                  description: Zoekt query string
+                  example: "func main lang:go"
+                Opts:
+                  $ref: "#/components/schemas/SearchOptions"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  Result:
+                    $ref: "#/components/schemas/SearchResult"
+        "400":
+          description: Invalid query or request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/list:
+    post:
+      tags: [Search]
+      summary: List repositories
+      operationId: listRepos
+      description: List indexed repositories matching a query.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Q]
+              properties:
+                Q:
+                  type: string
+                  description: Query string (typically repo filters like `r:name`)
+                  example: "r:zoekt"
+                Opts:
+                  type: object
+                  properties:
+                    Field:
+                      type: integer
+                      description: "0 = full repo list, 2 = repos map"
+                      default: 0
+      responses:
+        "200":
+          description: Repository list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  List:
+                    $ref: "#/components/schemas/RepoList"
+        "400":
+          description: Invalid query
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/file:
+    get:
+      tags: [Files]
+      summary: Get file contents
+      operationId: getFile
+      description: |
+        Retrieve file contents from a bare git repository at HEAD.
+        Uses literal (not regex) repo and path parameters.
+      parameters:
+        - name: repo
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Full repository name
+          example: "github.com/sourcegraph/zoekt"
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: File path within the repository
+          example: "README.md"
+      responses:
+        "200":
+          description: File contents as plain text
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          description: Missing parameters
+        "404":
+          description: File or repository not found
+
+  /api/reindex:
+    post:
+      tags: [Reindex]
+      summary: Trigger reindex
+      operationId: reindex
+      description: |
+        Queue a repository for immediate reindexing. The request is added to
+        the high-priority queue and processed ahead of periodic indexing.
+        The bare repo must already exist on disk (cloned by the mirror process).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo]
+              properties:
+                repo:
+                  type: string
+                  description: "Repository path in hostname/org/name format"
+                  example: "github.com/myorg/myrepo"
+      responses:
+        "202":
+          description: Reindex task accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    description: Task ID (UUID)
+                  status:
+                    type: string
+                    enum: [pending]
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Index queue full
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/reindex/{taskID}:
+    get:
+      tags: [Reindex]
+      summary: Get reindex task status
+      operationId: getReindexStatus
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Task ID returned by POST /api/reindex
+      responses:
+        "200":
+          description: Task status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReindexTask"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /mcp:
+    post:
+      tags: [MCP]
+      summary: MCP endpoint
+      operationId: mcp
+      description: |
+        Model Context Protocol (streamable HTTP, stateless).
+        Used by LLM clients for tool use. Exposes `search` and `get_file` tools.
+
+        See [MCP spec](https://modelcontextprotocol.io/) for the protocol format.
+      responses:
+        "200":
+          description: MCP response
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+    SearchOptions:
+      type: object
+      properties:
+        MaxDocDisplayCount:
+          type: integer
+          description: Max file matches to return
+          default: 0
+        NumContextLines:
+          type: integer
+          description: Context lines around matches
+          default: 0
+        ChunkMatches:
+          type: boolean
+          description: Use chunk-based matching instead of line-based
+          default: false
+        MaxWallTime:
+          type: string
+          description: Max search duration (Go duration string)
+          example: "10s"
+        TotalMaxMatchCount:
+          type: integer
+          description: Max total matches across all shards
+        ShardMaxMatchCount:
+          type: integer
+          description: Max matches per shard
+
+    SearchResult:
+      type: object
+      properties:
+        Stats:
+          $ref: "#/components/schemas/Stats"
+        Files:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileMatch"
+
+    Stats:
+      type: object
+      properties:
+        FileCount:
+          type: integer
+        MatchCount:
+          type: integer
+        Duration:
+          type: string
+        ShardsScanned:
+          type: integer
+        FilesConsidered:
+          type: integer
+        FilesLoaded:
+          type: integer
+        ContentBytesLoaded:
+          type: integer
+        IndexBytesLoaded:
+          type: integer
+
+    FileMatch:
+      type: object
+      properties:
+        FileName:
+          type: string
+        Repository:
+          type: string
+        Language:
+          type: string
+        Branches:
+          type: array
+          items:
+            type: string
+        LineMatches:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineMatch"
+        Score:
+          type: number
+
+    LineMatch:
+      type: object
+      properties:
+        Line:
+          type: string
+          description: Base64-encoded line content
+        LineNumber:
+          type: integer
+        LineFragments:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineFragment"
+
+    LineFragment:
+      type: object
+      properties:
+        LineOffset:
+          type: integer
+        MatchLength:
+          type: integer
+        SymbolInfo:
+          $ref: "#/components/schemas/SymbolInfo"
+
+    SymbolInfo:
+      type: object
+      nullable: true
+      properties:
+        Sym:
+          type: string
+        Kind:
+          type: string
+        Parent:
+          type: string
+        ParentKind:
+          type: string
+
+    RepoList:
+      type: object
+      properties:
+        Repos:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepoListEntry"
+        Stats:
+          $ref: "#/components/schemas/RepoStats"
+
+    RepoListEntry:
+      type: object
+      properties:
+        Repository:
+          $ref: "#/components/schemas/Repository"
+        IndexMetadata:
+          type: object
+          properties:
+            IndexFormatVersion:
+              type: integer
+            IndexTime:
+              type: string
+              format: date-time
+        Stats:
+          $ref: "#/components/schemas/RepoStats"
+
+    Repository:
+      type: object
+      properties:
+        ID:
+          type: integer
+        Name:
+          type: string
+        URL:
+          type: string
+        Branches:
+          type: array
+          items:
+            type: object
+            properties:
+              Name:
+                type: string
+              Version:
+                type: string
+        HasSymbols:
+          type: boolean
+
+    RepoStats:
+      type: object
+      properties:
+        Repos:
+          type: integer
+        Shards:
+          type: integer
+        Documents:
+          type: integer
+        IndexBytes:
+          type: integer
+        ContentBytes:
+          type: integer
+
+    ReindexTask:
+      type: object
+      properties:
+        id:
+          type: string
+        repo:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        error:
+          type: string
+          nullable: true

@@ -1,0 +1,147 @@
+# zoekt-server configuration
+# Environment variables: ${VAR} or ${VAR:-default} in any string value
+# Credentials: env vars, file:///path, or literal values
+
+# Server settings
+# listen: ":8000"                   # address to bind (default: :8000)
+# data_dir: /data                   # root directory for repos and index data (default: /data)
+# index_dir: /data/index            # index shard storage (default: data_dir/index)
+
+# Indexer settings
+# fetch_interval: 5m                # how often to git-fetch existing repos (default: 5m)
+# mirror_interval: 24h              # how often to re-discover repos from code hosts (default: 24h)
+# index_timeout: 1h                 # max time for a single repo indexing run (default: 1h)
+# cpu_fraction: 0.25                # fraction of CPUs to use for indexing (default: 0.25)
+# max_log_age: 72h                  # delete indexer log files older than this (default: 72h)
+
+# MCP instructions — extra context appended to tool descriptions for AI clients
+# instructions: |
+#   Code search across all internal repositories.
+#   Indexed organizations: backend, frontend, data-platform.
+# instructions_file: /path/to/instructions.txt
+
+# Mirror entries — each has exactly one code host key
+mirrors:
+  # --- GitHub ---
+
+  # Single org on github.com
+  - github:
+      org: mycompany
+      token: ${GITHUB_TOKEN}
+
+  # Multiple orgs and users in one entry
+  # - github:
+  #     orgs:
+  #       - backend-team
+  #       - frontend-team
+  #     users:
+  #       - bot-account
+  #     token: ${GITHUB_TOKEN}
+
+  # GitHub Enterprise — auto-discover all orgs, excluding some
+  # - github:
+  #     discover_orgs: true
+  #     url: https://github.corp.example.com
+  #     token: ${GHE_TOKEN}
+  #     exclude:                       # exclude orgs by name (exact match)
+  #       - team-members
+  #       - archives
+
+  # GitHub Enterprise — include only specific orgs from discover_orgs
+  # - github:
+  #     discover_orgs: true
+  #     url: https://github.corp.example.com
+  #     token: ${GHE_TOKEN}
+  #     include:                       # include only these orgs (exact match)
+  #       - apis
+  #       - backend-libraries
+
+  # All GitHub filtering options
+  # - github:
+  #     org: mycompany
+  #     token: ${GITHUB_TOKEN}
+  #     name: "^service-.*"            # regex include filter on repo name
+  #     exclude_repos: "^legacy-.*"    # regex exclude filter on repo name
+  #     topics:                        # include repos with any of these topics
+  #       - production
+  #     exclude_topics:                # exclude repos with any of these topics
+  #       - deprecated
+  #     visibility:                    # filter by visibility: public, private, internal
+  #       - private
+  #       - internal
+  #     archived: true                 # include archived repos (default: false)
+  #     forks: true                    # include forks (default: false)
+  #     keep_deleted: true             # keep index for deleted repos (default: false)
+
+  # Token from file
+  # - github:
+  #     org: engineering
+  #     url: https://github.corp.example.com
+  #     token: file:///run/secrets/ghe-token
+
+  # --- GitLab ---
+
+  # - gitlab:
+  #     url: https://gitlab.example.com/api/v4/
+  #     token: ${GITLAB_TOKEN}
+  #     name: "^service-.*"            # regex include filter on repo name
+  #     exclude_repos: "^legacy-.*"    # regex exclude filter on repo name
+  #     only_public: true              # only index public projects (default: false)
+  #     exclude_user_repos: true       # exclude personal/user projects (default: false)
+  #     archived: true                 # include archived repos (default: false)
+  #     keep_deleted: true             # keep index for deleted repos (default: false)
+
+  # --- Gitea ---
+
+  # - gitea:
+  #     url: https://gitea.example.com
+  #     org: backend                   # index an org (mutually exclusive with user)
+  #     # user: myuser                 # or index a user's repos
+  #     token: ${GITEA_TOKEN}
+  #     name: "^service-.*"            # regex include filter on repo name
+  #     exclude_repos: "^legacy-.*"    # regex exclude filter on repo name
+  #     topics:                        # include repos with any of these topics
+  #       - production
+  #     exclude_topics:                # exclude repos with any of these topics
+  #       - deprecated
+  #     archived: true                 # include archived repos (default: false)
+  #     forks: true                    # include forks (default: false)
+  #     keep_deleted: true             # keep index for deleted repos (default: false)
+
+  # --- Gerrit ---
+
+  # - gerrit:
+  #     url: https://gerrit.example.com
+  #     credentials: ${GERRIT_USER}:${GERRIT_PASS}
+  #     name: "^platform/.*"           # regex include filter on repo name
+  #     exclude: ".*-test$"            # regex exclude filter on repo name
+  #     active: true                   # only active projects (default: false)
+  #     fetch_meta_config: true        # fetch meta/config branch (default: false)
+  #     repo_name_format: "project"    # "qualified" (default) or "project"
+  #     keep_deleted: true             # keep index for deleted repos (default: false)
+
+  # --- Bitbucket Server ---
+
+  # - bitbucket_server:
+  #     url: https://bitbucket.example.com
+  #     project: BACKEND               # project key (omit for all projects)
+  #     credentials: file:///etc/zoekt/bb-creds  # "username password" format
+  #     name: "^service-.*"            # regex include filter on repo name
+  #     exclude: "^legacy-.*"          # regex exclude filter on repo name
+  #     project_type: "USER"           # "NORMAL" (default) or "USER" for personal repos
+  #     disable_tls: true              # skip TLS verification (default: false)
+  #     keep_deleted: true             # keep index for deleted repos (default: false)
+
+  # --- Gitiles ---
+
+  # - gitiles:
+  #     url: https://android.googlesource.com
+  #     name: "^platform/.*"           # regex include filter on repo name
+  #     exclude: ".*-test$"            # regex exclude filter on repo name
+
+  # --- CGit ---
+
+  # - cgit:
+  #     url: https://git.savannah.gnu.org/cgit
+  #     name: "^gnu/.*"                # regex include filter on repo name
+  #     exclude: ".*-old$"             # regex exclude filter on repo name
