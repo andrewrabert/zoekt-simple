@@ -15,7 +15,7 @@ RUN go install ./cmd/...
 FROM alpine:3.23
 
 RUN apk add --no-cache \
-    git ca-certificates jansson ctags \
+    git ca-certificates jansson ctags tini \
  && ln -s /usr/bin/ctags /usr/bin/universal-ctags
 
 COPY --from=builder /go/bin/ /usr/local/bin/
@@ -24,4 +24,5 @@ ENV ZOEKT_CONFIG=/config.yaml
 ENV ZOEKT_LISTEN=:8000
 EXPOSE 8000
 
-ENTRYPOINT ["zoekt-server"]
+ENTRYPOINT ["tini", "--"]
+CMD ["zoekt-server"]
