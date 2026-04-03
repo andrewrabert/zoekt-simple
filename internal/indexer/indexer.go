@@ -261,7 +261,8 @@ func (idx *Indexer) indexRepo(dir string) error {
 			CTagsMustSucceed: true,
 			CTagsPath:        findCTags(),
 		},
-		Branches: []string{"HEAD"},
+		BranchPrefix: "refs/heads/",
+		Branches:     []string{"HEAD"},
 	}
 
 	type result struct {
