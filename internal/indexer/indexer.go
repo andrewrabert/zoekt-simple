@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/sourcegraph/zoekt/gitindex"
 	"github.com/sourcegraph/zoekt/index"
 
@@ -26,10 +29,24 @@ type TaskUpdater interface {
 	Update(id, status string, errMsg *string)
 }
 
+// IndexTarget describes a named index with include/exclude filtering.
+type IndexTarget struct {
+	Name     string
+	IndexDir string
+	Include  []CompiledInclude
+	Exclude  []*regexp.Regexp
+}
+
+// CompiledInclude is a compiled repo+ref regex pair.
+type CompiledInclude struct {
+	Repo *regexp.Regexp
+	Refs *regexp.Regexp // nil = HEAD only; matches branch and tag names
+}
+
 // Options configures the background indexing loop.
 type Options struct {
 	DataDir        string
-	IndexDir       string
+	Targets        []IndexTarget
 	MirrorConfig   string
 	FetchInterval  time.Duration
 	MirrorInterval time.Duration
@@ -65,6 +82,11 @@ func (o *Options) validate() {
 		o.MaxLogAge = 3 * day
 	}
 	o.repoDir = filepath.Join(o.DataDir, "repos")
+	for _, t := range o.Targets {
+		if err := os.MkdirAll(t.IndexDir, 0o755); err != nil {
+			panic(fmt.Sprintf("create index dir %s: %v", t.IndexDir, err))
+		}
+	}
 }
 
 // Indexer manages periodic mirroring, fetching, and indexing of git repos.
@@ -161,7 +183,7 @@ func (idx *Indexer) periodicMirror(ctx context.Context) {
 	config.PeriodicMirrorFile(ctx, idx.opts.repoDir, idx.opts.MirrorConfig, idx.opts.MirrorInterval, notify)
 }
 
-// indexPending consumes from the queue and indexes each repo.
+// indexPending consumes from the queue and indexes each repo into all matching targets.
 func (idx *Indexer) indexPending(ctx context.Context) {
 	for {
 		req, ok := idx.queue.Next(ctx)
@@ -187,18 +209,31 @@ func (idx *Indexer) indexPending(ctx context.Context) {
 			}
 		}
 
-		err := idx.indexRepo(req.RepoDir)
+		// Derive repo name once for all targets.
+		repoName := ""
+		if rel, err := filepath.Rel(idx.opts.repoDir, req.RepoDir); err == nil {
+			repoName = strings.TrimSuffix(rel, ".git")
+		}
 
-		// Clean up any leftover .tmp files in the index dir.
-		if tmps, globErr := filepath.Glob(filepath.Join(idx.opts.IndexDir, "*.tmp")); globErr == nil {
-			for _, tmp := range tmps {
-				os.Remove(tmp)
+		var firstErr error
+		for i := range idx.opts.Targets {
+			if err := idx.indexRepoForTarget(req.RepoDir, repoName, &idx.opts.Targets[i]); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+
+		// Clean up any leftover .tmp files across all target index dirs.
+		for _, t := range idx.opts.Targets {
+			if tmps, globErr := filepath.Glob(filepath.Join(t.IndexDir, "*.tmp")); globErr == nil {
+				for _, tmp := range tmps {
+					os.Remove(tmp)
+				}
 			}
 		}
 
 		if req.TaskID != "" {
-			if err != nil {
-				errMsg := err.Error()
+			if firstErr != nil {
+				errMsg := firstErr.Error()
 				idx.tracker.Update(req.TaskID, "failed", &errMsg)
 			} else {
 				idx.tracker.Update(req.TaskID, "completed", nil)
@@ -248,22 +283,31 @@ func findCTags() string {
 	return ""
 }
 
-// indexRepo runs gitindex.IndexGitRepo in a goroutine with a timeout.
-// It recovers from panics.
-func (idx *Indexer) indexRepo(dir string) error {
+// indexRepoForTarget indexes a repo into a specific target. It checks
+// include/exclude filters, resolves branches, and runs gitindex.IndexGitRepo
+// in a goroutine with a timeout.
+func (idx *Indexer) indexRepoForTarget(dir, repoName string, target *IndexTarget) error {
+	branches := resolveBranchesForTarget(repoName, dir, target)
+	if branches == nil {
+		return nil
+	}
+
+	slog.Info("indexing", "repo", repoName, "target", target.Name, "branches", branches)
+
 	opts := gitindex.Options{
 		RepoDir:      dir,
 		Incremental:  true,
 		RepoCacheDir: idx.opts.repoDir,
 		BuildOptions: index.Options{
-			IndexDir:         idx.opts.IndexDir,
+			IndexDir:         target.IndexDir,
 			Parallelism:      idx.opts.cpuCount,
 			CTagsMustSucceed: true,
 			CTagsPath:        findCTags(),
 		},
-		BranchPrefix: "refs/heads/",
-		Branches:     []string{"HEAD"},
-		Submodules:   true,
+		BranchPrefix:       "refs/heads/",
+		Branches:           branches,
+		AllowMissingBranch: true,
+		Submodules:         true,
 	}
 
 	type result struct {
@@ -284,15 +328,90 @@ func (idx *Indexer) indexRepo(dir string) error {
 	select {
 	case res := <-done:
 		if res.err != nil {
-			slog.Error("indexRepo failed", "dir", dir, "error", res.err)
+			slog.Error("indexRepo failed", "dir", dir, "target", target.Name, "error", res.err)
 		} else {
-			slog.Info("indexRepo done", "dir", dir)
+			slog.Info("indexRepo done", "dir", dir, "target", target.Name)
 		}
 		return res.err
 	case <-time.After(idx.opts.IndexTimeout):
-		slog.Error("indexRepo timeout", "dir", dir, "timeout", idx.opts.IndexTimeout)
+		slog.Error("indexRepo timeout", "dir", dir, "target", target.Name, "timeout", idx.opts.IndexTimeout)
 		return fmt.Errorf("index timeout after %s for %s", idx.opts.IndexTimeout, dir)
 	}
+}
+
+// resolveBranchesForTarget checks include/exclude filters and resolves which
+// branches to index in a single pass. Returns nil if the repo should be skipped.
+func resolveBranchesForTarget(repoName, bareDir string, target *IndexTarget) []string {
+	for _, ex := range target.Exclude {
+		if ex.MatchString(repoName) {
+			return nil
+		}
+	}
+	if len(target.Include) == 0 {
+		return []string{"HEAD"} // Catch-all target.
+	}
+	for _, inc := range target.Include {
+		if !inc.Repo.MatchString(repoName) {
+			continue
+		}
+		if inc.Refs == nil {
+			return []string{"HEAD"}
+		}
+		refs := resolveRefs(bareDir, inc.Refs)
+		if len(refs) == 0 {
+			return nil
+		}
+		return refs
+	}
+	return nil // No include matched.
+}
+
+// targetIncludesRepo checks whether a repo passes the target's include/exclude
+// filters (without resolving branches). Used by orphan cleanup.
+func targetIncludesRepo(repoName string, target *IndexTarget) bool {
+	for _, ex := range target.Exclude {
+		if ex.MatchString(repoName) {
+			return false
+		}
+	}
+	if len(target.Include) == 0 {
+		return true
+	}
+	for _, inc := range target.Include {
+		if inc.Repo.MatchString(repoName) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveRefs lists refs in a bare git repo and returns branch and tag names
+// matching the given pattern.
+func resolveRefs(bareDir string, pattern *regexp.Regexp) []string {
+	repo, err := git.PlainOpen(bareDir)
+	if err != nil {
+		slog.Warn("open repo for ref listing", "dir", bareDir, "error", err)
+		return nil
+	}
+
+	refs, err := repo.References()
+	if err != nil {
+		slog.Warn("list refs", "dir", bareDir, "error", err)
+		return nil
+	}
+
+	var matched []string
+	refs.ForEach(func(ref *plumbing.Reference) error {
+		if !ref.Name().IsBranch() && !ref.Name().IsTag() {
+			return nil
+		}
+		name := ref.Name().Short()
+		if pattern.MatchString(name) {
+			matched = append(matched, name)
+		}
+		return nil
+	})
+	return matched
 }
 
 // deleteOrphanIndexes periodically scans the index directory and removes
@@ -313,7 +432,13 @@ func (idx *Indexer) deleteOrphanIndexes(ctx context.Context) {
 }
 
 func (idx *Indexer) deleteOrphans() {
-	shards, err := filepath.Glob(filepath.Join(idx.opts.IndexDir, "*.zoekt"))
+	for i := range idx.opts.Targets {
+		idx.deleteOrphansForTarget(&idx.opts.Targets[i])
+	}
+}
+
+func (idx *Indexer) deleteOrphansForTarget(target *IndexTarget) {
+	shards, err := filepath.Glob(filepath.Join(target.IndexDir, "*.zoekt"))
 	if err != nil {
 		slog.Error("glob index shards", "error", err)
 		return
@@ -330,8 +455,22 @@ func (idx *Indexer) deleteOrphans() {
 			if repo.Source == "" {
 				continue
 			}
+
+			shouldDelete := false
+
 			if _, err := os.Stat(repo.Source); os.IsNotExist(err) {
-				slog.Info("deleting orphan shard", "shard", shard, "source", repo.Source)
+				// Bare repo no longer exists on disk.
+				shouldDelete = true
+			} else if rel, err := filepath.Rel(idx.opts.repoDir, repo.Source); err == nil {
+				// Bare repo exists but may no longer belong to this target.
+				repoName := strings.TrimSuffix(rel, ".git")
+				if !targetIncludesRepo(repoName, target) {
+					shouldDelete = true
+				}
+			}
+
+			if shouldDelete {
+				slog.Info("deleting orphan shard", "shard", shard, "target", target.Name, "source", repo.Source)
 				paths, pathErr := index.IndexFilePaths(shard)
 				if pathErr != nil {
 					slog.Warn("IndexFilePaths", "shard", shard, "error", pathErr)

@@ -24,9 +24,57 @@ type YAMLConfig struct {
 	IndexTimeout   time.Duration `yaml:"index_timeout"`
 	CPUFraction    float64       `yaml:"cpu_fraction"`
 	MaxLogAge      time.Duration `yaml:"max_log_age"`
+	Branches       map[string][]string `yaml:"branches"`
 	Instructions   string        `yaml:"instructions"`
 	InstrFile      string        `yaml:"instructions_file"`
-	Mirrors        []MirrorEntry `yaml:"mirrors"`
+	DefaultIndex   string                 `yaml:"default_index"`
+	Indexes        map[string]IndexConfig `yaml:"indexes"`
+	Mirrors        []MirrorEntry          `yaml:"mirrors"`
+}
+
+// IndexConfig defines a named search index with optional repo/branch filtering.
+type IndexConfig struct {
+	Include      []IncludeEntry `yaml:"include"`
+	Exclude      []string       `yaml:"exclude"`
+	Instructions string         `yaml:"instructions"`
+	InstrFile    string         `yaml:"instructions_file"`
+}
+
+// IncludeEntry specifies a repo regex pattern and optional ref regex pattern.
+type IncludeEntry struct {
+	Repo string `yaml:"repo"`
+	Refs string `yaml:"refs,omitempty"` // matches branch and tag names
+}
+
+// ResolvedIndexes returns the configured indexes, or synthesizes a single
+// "default" index from legacy fields if no indexes section is present.
+func (c *YAMLConfig) ResolvedIndexes() map[string]IndexConfig {
+	if len(c.Indexes) > 0 {
+		return c.Indexes
+	}
+	// Synthesize from legacy fields.
+	idx := IndexConfig{
+		Instructions: c.Instructions,
+		InstrFile:    c.InstrFile,
+	}
+	// Convert legacy Branches map to include entries.
+	for repo, branches := range c.Branches {
+		for _, b := range branches {
+			idx.Include = append(idx.Include, IncludeEntry{
+				Repo: "^" + regexp.QuoteMeta(repo) + "$",
+				Refs: "^" + regexp.QuoteMeta(b) + "$",
+			})
+		}
+	}
+	return map[string]IndexConfig{"default": idx}
+}
+
+// ResolvedDefaultIndex returns the name of the default index.
+func (c *YAMLConfig) ResolvedDefaultIndex() string {
+	if c.DefaultIndex != "" {
+		return c.DefaultIndex
+	}
+	return "default"
 }
 
 type MirrorEntry struct {

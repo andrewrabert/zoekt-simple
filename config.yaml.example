@@ -14,11 +14,48 @@
 # cpu_fraction: 0.25                # fraction of CPUs to use for indexing (default: 0.25)
 # max_log_age: 72h                  # delete indexer log files older than this (default: 72h)
 
-# MCP instructions — extra context appended to tool descriptions for AI clients
+# MCP instructions — global default appended to tool descriptions for AI clients
+# Per-index instructions override these (see indexes section below).
 # instructions: |
 #   Code search across all internal repositories.
 #   Indexed organizations: backend, frontend, data-platform.
 # instructions_file: /path/to/instructions.txt
+
+# Named indexes — each gets its own shard directory, streamer, web UI, and MCP endpoint.
+# Served at /index/<name>/ (web UI) and /index/<name>/mcp (MCP).
+# The default_index is also served at / and /mcp.
+#
+# default_index: default           # which index serves at / and /mcp (default: "default")
+#
+# indexes:
+#   # Catch-all: no include/exclude means all repos, HEAD only.
+#   default: {}
+#
+#   # Selective: only matching repos, specific refs (branches and tags).
+#   stable:
+#     include:
+#       - repo: "github\\.com/myorg/myapp(-web)?$"
+#         refs: "^release-.*"           # matches branch and tag names
+#       - repo: "github\\.com/myorg/libfoo$"
+#         refs: "^v2\\.0\\.0$"          # pin to a specific tag
+#     instructions: "Search stable release branches only."
+#
+#   # Exclude: all repos except some.
+#   work:
+#     exclude:
+#       - "github\\.corp\\.example\\.com/team-members/.*"
+#     instructions: "All work repos except team-members org."
+#
+# Include/exclude semantics:
+#   - include: list of {repo, refs} entries (regex). Repo must match at least one.
+#     If refs is omitted, only HEAD is indexed. If specified, matching branch
+#     and tag names are resolved from the bare repo.
+#   - exclude: list of repo regex patterns. Applied after include. Exclude always wins.
+#   - No include/exclude: indexes all repos at HEAD.
+#   - Per-index instructions/instructions_file override global instructions.
+#
+# If no indexes section is present, a single "default" index is created
+# that indexes all repos at HEAD (backward compatible).
 
 # Mirror entries — each has exactly one code host key
 mirrors:

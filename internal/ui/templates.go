@@ -103,7 +103,7 @@ var TemplateText = map[string]string{
 <nav class="navbar navbar-default">
   <div class="container-fluid">
     <div class="navbar-header">
-      <a class="navbar-brand" href="/">Zoekt</a>
+      <a class="navbar-brand" href="./">Zoekt</a>
       <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar-collapse" aria-expanded="false">
         <span class="sr-only">Toggle navigation</span>
         <span class="icon-bar"></span>
@@ -212,7 +212,8 @@ document.onkeydown=function(e){
 `,
 
 	"footerBoilerplate": `<a class="navbar-text" href="about">About</a>
-<a class="navbar-text" href="/docs/">API Docs</a>`,
+<a class="navbar-text" href="/docs/">API Docs</a>
+<a class="navbar-text" href="/index/">Indexes</a>`,
 
 	"results": `
 <html>
@@ -313,11 +314,11 @@ document.onkeydown=function(e){
       <thead>
 	<tr>
 	  {{- define "q"}}q={{.Last.Query}}{{if (gt .Last.Num 0)}}&num={{.Last.Num}}{{end}}{{end}}
-	  <th>Name <a href="/search?{{template "q" .}}&order=name">▼</a><a href="/search?{{template "q" .}}&order=revname">▲</a></th>
-	  <th>Last updated <a href="/search?{{template "q" .}}&order=revtime">▼</a><a href="/search?{{template "q" .}}&order=time">▲</a></th>
+	  <th>Name <a href="search?{{template "q" .}}&order=name">▼</a><a href="search?{{template "q" .}}&order=revname">▲</a></th>
+	  <th>Last updated <a href="search?{{template "q" .}}&order=revtime">▼</a><a href="search?{{template "q" .}}&order=time">▲</a></th>
 	  <th>Branches</th>
-	  <th>Size <a href="/search?{{template "q" .}}&order=revsize">▼</a><a href="/search?{{template "q" .}}&order=size">▲</a></th>
-	  <th>RAM <a href="/search?{{template "q" .}}&order=revram">▼</a><a href="/search?{{template "q" .}}&order=ram">▲</a></th>
+	  <th>Size <a href="search?{{template "q" .}}&order=revsize">▼</a><a href="search?{{template "q" .}}&order=size">▲</a></th>
+	  <th>RAM <a href="search?{{template "q" .}}&order=revram">▼</a><a href="search?{{template "q" .}}&order=ram">▲</a></th>
 	</tr>
       </thead>
       <tbody>
