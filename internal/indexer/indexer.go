@@ -263,6 +263,7 @@ func (idx *Indexer) indexRepo(dir string) error {
 		},
 		BranchPrefix: "refs/heads/",
 		Branches:     []string{"HEAD"},
+		Submodules:   true,
 	}
 
 	type result struct {
