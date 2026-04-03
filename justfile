@@ -1,3 +1,7 @@
+[private]
+default:
+    @just -l
+
 # Ensure git submodules are initialized
 [private]
 ensure-submodules:
