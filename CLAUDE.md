@@ -1,5 +1,9 @@
 # zoekt-simple
 
+## Build
+
+This project uses [just](https://github.com/casey/just) as a command runner. Run `just -l` to see available recipes. Key recipes: `build`, `test`, `docker-build`, `docker-run`.
+
 ## Skills
 
 This project has custom skills in `.claude/skills/`. You MUST use them:
