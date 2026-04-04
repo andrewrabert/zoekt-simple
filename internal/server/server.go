@@ -101,11 +101,42 @@ func (s *Server) RegisterHandlers(mux *http.ServeMux) {
 			&mcp.StreamableHTTPOptions{Stateless: true},
 		)
 	}
-	mux.Handle("/mcp", s.httpHandler)
-	mux.Handle("/mcp/", s.httpHandler)
+	// Wrap the MCP handler to fix DELETE responses: the Go MCP SDK returns
+	// 204 No Content for session termination, but the TypeScript MCP SDK's
+	// Response constructor rejects 204 as an invalid status code.
+	// Rewrite 204 to 200 on DELETE so all clients can handle the response.
+	mcpHandler := rewriteDeleteStatus(s.httpHandler)
+	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp/", mcpHandler)
 	mux.HandleFunc("POST /api/reindex", s.app.postReindex)
 	mux.HandleFunc("GET /api/reindex/{taskID}", s.app.getReindex)
 	mux.HandleFunc("GET /api/file", s.app.getFile)
+}
+
+// rewriteDeleteStatus wraps an http.Handler to rewrite 204 No Content
+// responses to DELETE requests as 200 OK. This works around a compatibility
+// issue where the TypeScript MCP SDK rejects 204 in its Response constructor.
+func rewriteDeleteStatus(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			next.ServeHTTP(&statusRewriter{ResponseWriter: w}, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// statusRewriter wraps an http.ResponseWriter to rewrite 204 status codes
+// to 200, ensuring compatibility with clients that reject 204.
+type statusRewriter struct {
+	http.ResponseWriter
+}
+
+func (sw *statusRewriter) WriteHeader(code int) {
+	if code == http.StatusNoContent {
+		code = http.StatusOK
+	}
+	sw.ResponseWriter.WriteHeader(code)
 }
 
 // --- internal app ---
