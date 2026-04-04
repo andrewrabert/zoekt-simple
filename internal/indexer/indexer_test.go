@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"testing"
+	"time"
 )
 
 func TestOptionsValidate(t *testing.T) {
@@ -24,3 +25,32 @@ func TestOptionsBadCPUFraction(t *testing.T) {
 	opts := Options{CPUFraction: -1}
 	opts.validate()
 }
+
+func TestReconfigure(t *testing.T) {
+	opts := Options{
+		DataDir:       t.TempDir(),
+		CPUFraction:   0.25,
+		FetchInterval: 5 * time.Minute,
+	}
+	tracker := &noopTracker{}
+	idx := New(opts, tracker)
+
+	newOpts := Options{
+		DataDir:       opts.DataDir,
+		CPUFraction:   0.5,
+		FetchInterval: 10 * time.Minute,
+	}
+	idx.Reconfigure(newOpts)
+
+	got := idx.CurrentOptions()
+	if got.CPUFraction != 0.5 {
+		t.Fatalf("expected CPUFraction 0.5, got %f", got.CPUFraction)
+	}
+	if got.FetchInterval != 10*time.Minute {
+		t.Fatalf("expected FetchInterval 10m, got %s", got.FetchInterval)
+	}
+}
+
+type noopTracker struct{}
+
+func (n *noopTracker) Update(id, status string, errMsg *string) {}

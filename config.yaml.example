@@ -14,6 +14,16 @@
 # cpu_fraction: 0.25                # fraction of CPUs to use for indexing (default: 0.25)
 # max_log_age: 72h                  # delete indexer log files older than this (default: 72h)
 
+# Hot-reload
+# Trigger a config reload via SIGHUP or POST /api/reload.
+#
+# Reloadable settings: mirrors, indexes, default_index, instructions,
+#   instructions_file, fetch_interval, mirror_interval, index_timeout,
+#   cpu_fraction, max_log_age, branches.
+#
+# NOT reloadable (requires restart): listen, data_dir, index_dir.
+# Changing these logs a warning and keeps the previous values.
+
 # MCP instructions — global default appended to tool descriptions for AI clients
 # Per-index instructions override these (see indexes section below).
 # instructions: |

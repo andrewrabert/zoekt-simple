@@ -4,6 +4,8 @@
 
 This project uses [just](https://github.com/casey/just) as a command runner. Run `just -l` to see available recipes. Key recipes: `build`, `test`, `docker-build`, `docker-run`.
 
+**NEVER run `go build` or `go test` directly.** Always use `just build` and `just test`. Running `go build` without `-o` dumps binaries in the repo root.
+
 ## Skills
 
 This project has custom skills in `.claude/skills/`. You MUST use them:
