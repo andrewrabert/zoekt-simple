@@ -60,19 +60,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Compute version info
+        id: version
+        run: |
+          echo "version=$(git describe --tags --always --dirty 2>/dev/null || cat VERSION)" >> "$GITHUB_OUTPUT"
+          echo "upstream_commit=$(git -C zoekt rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build binaries
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+          UPSTREAM_COMMIT: ${{ steps.version.outputs.upstream_commit }}
         run: |
+          LDFLAGS="-X github.com/sourcegraph/zoekt-simple/internal/buildinfo.Version=${BUILD_VERSION} -X github.com/sourcegraph/zoekt-simple/internal/buildinfo.UpstreamCommit=${UPSTREAM_COMMIT}"
           mkdir -p build/
-          go build -o build/ ./cmd/...
+          go build -ldflags "$LDFLAGS" -o build/ ./cmd/...
           cd zoekt && go build -o ../build/ ./cmd/...
 
       - name: Create archive

@@ -8,22 +8,32 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/sourcegraph/zoekt-simple/internal/buildinfo"
 )
 
 func main() {
 	var (
-		offset int
-		limit  int
-		baseURL string
+		offset      int
+		limit       int
+		baseURL     string
+		showVersion bool
 	)
 	flag.IntVar(&offset, "offset", 0, "Skip first N lines")
 	flag.IntVar(&limit, "limit", 0, "Return only N lines (0 = all)")
 	flag.StringVar(&baseURL, "zoekt-url", os.Getenv("ZOEKT_URL"), "Zoekt server URL (required, or set ZOEKT_URL)")
+	flag.BoolVar(&showVersion, "version", false, "Print version information and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <repo> <path>\n\n  repo: full repository name (e.g. github.com/org/repo)\n  path: file path within the repository\n\nFlags:\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if showVersion {
+		info := buildinfo.Info()
+		fmt.Printf("zoekt-get-file %s (upstream zoekt %s)\n", info.Version, info.UpstreamCommit)
+		os.Exit(0)
+	}
 
 	if baseURL == "" {
 		fmt.Fprintln(os.Stderr, "error: zoekt-url is required (set via -zoekt-url flag or ZOEKT_URL env var)")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"html"
@@ -21,6 +22,7 @@ import (
 	"github.com/sourcegraph/zoekt/search"
 	"github.com/sourcegraph/zoekt/web"
 
+	"github.com/sourcegraph/zoekt-simple/internal/buildinfo"
 	"github.com/sourcegraph/zoekt-simple/internal/config"
 	"github.com/sourcegraph/zoekt-simple/internal/docs"
 	"github.com/sourcegraph/zoekt-simple/internal/indexer"
@@ -39,7 +41,14 @@ func envDefault(key, fallback string) string {
 func main() {
 	configFile := flag.String("config", envDefault("ZOEKT_CONFIG", ""), "path to YAML config file (env: ZOEKT_CONFIG)")
 	listen := flag.String("listen", envDefault("ZOEKT_LISTEN", ""), "override listen address (env: ZOEKT_LISTEN)")
+	showVersion := flag.Bool("version", false, "print version information and exit")
 	flag.Parse()
+
+	if *showVersion {
+		info := buildinfo.Info()
+		fmt.Printf("zoekt-server %s (upstream zoekt %s)\n", info.Version, info.UpstreamCommit)
+		os.Exit(0)
+	}
 
 	if *configFile == "" {
 		log.Fatal("required: -config <path> or ZOEKT_CONFIG env var")
@@ -209,6 +218,10 @@ func main() {
 	// Global routes.
 	docs.RegisterHandlers(mux)
 	static.RegisterHandlers(mux)
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(buildinfo.Info())
+	})
 
 	// Create indexer with all targets.
 	idx := indexer.New(indexer.Options{

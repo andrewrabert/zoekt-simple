@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sourcegraph/zoekt-simple/internal/buildinfo"
 	"github.com/sourcegraph/zoekt/query"
 )
 
@@ -500,6 +501,8 @@ func main() {
 		url              string
 	)
 
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Print version information and exit")
 	flag.IntVar(&maxResults, "n", 50, "Maximum number of file matches")
 	flag.IntVar(&maxResults, "max-results", 50, "Maximum number of file matches")
 	flag.BoolVar(&jsonOutput, "json", false, "Output results as JSON")
@@ -527,6 +530,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  case:yes - case-sensitive search")
 	}
 	flag.Parse()
+
+	if showVersion {
+		info := buildinfo.Info()
+		fmt.Printf("zoekt-search %s (upstream zoekt %s)\n", info.Version, info.UpstreamCommit)
+		os.Exit(0)
+	}
 
 	if url == "" {
 		fmt.Fprintln(os.Stderr, "error: zoekt-url is required (set via -zoekt-url flag or ZOEKT_URL env var)")
