@@ -111,6 +111,9 @@ func main() {
 
 	for name, idxCfg := range indexes {
 		indexDir := filepath.Join(dataDir, "index", name)
+		if err := os.MkdirAll(indexDir, 0o755); err != nil {
+			log.Fatalf("MkdirAll(%s): %v", indexDir, err)
+		}
 
 		streamer, err := search.NewDirectorySearcherFast(indexDir)
 		if err != nil {
