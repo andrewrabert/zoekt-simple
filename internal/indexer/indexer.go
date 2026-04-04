@@ -170,6 +170,7 @@ func (idx *Indexer) periodicMirror(ctx context.Context) {
 		defer ticker.Stop()
 		for {
 			config.ExecuteMirror(idx.opts.MirrorEntries, idx.opts.repoDir, notify)
+			config.CleanupGitMirrorRepos(idx.opts.repoDir, idx.opts.MirrorEntries)
 			select {
 			case <-ctx.Done():
 				return

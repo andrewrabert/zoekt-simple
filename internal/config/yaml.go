@@ -85,6 +85,7 @@ type MirrorEntry struct {
 	BitbucketServer *BitbucketServerMirror `yaml:"bitbucket_server"`
 	Gitiles         *GitilesMirror         `yaml:"gitiles"`
 	CGit            *CGitMirror            `yaml:"cgit"`
+	Git             *GitMirror             `yaml:"git"`
 }
 
 type GitHubMirror struct {
@@ -164,6 +165,26 @@ type CGitMirror struct {
 	URL     string `yaml:"url"`
 	Name    string `yaml:"name"`
 	Exclude string `yaml:"exclude"`
+}
+
+type GitMirror struct {
+	URLs []GitRepo `yaml:"urls"`
+}
+
+// GitRepo can be a plain URL string or an object with url and name.
+type GitRepo struct {
+	URL  string `yaml:"url"`
+	Name string `yaml:"name"`
+}
+
+func (g *GitRepo) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		g.URL = s
+		return nil
+	}
+	type plain GitRepo
+	return unmarshal((*plain)(g))
 }
 
 var envVarRe = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -558,6 +579,15 @@ func ConvertMirrors(mirrors []MirrorEntry) ([]ConfigEntry, func(), error) {
 			e.CGitURL = g.URL
 			e.Name = g.Name
 			e.Exclude = g.Exclude
+
+		case m.Git != nil:
+			for _, r := range m.Git.URLs {
+				if r.URL == "" {
+					return nil, cleanup, fmt.Errorf("git mirror: empty url")
+				}
+				entries = append(entries, ConfigEntry{GitURL: r.URL, Name: r.Name})
+			}
+			continue
 
 		default:
 			continue

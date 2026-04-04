@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestExpandEnv(t *testing.T) {
@@ -368,6 +370,79 @@ func TestNetrcEntries(t *testing.T) {
 	}
 	if entries[2].Machine != "gitlab.example.com" || entries[2].Password != "glpat-xyz" {
 		t.Fatalf("unexpected entry[2]: %+v", entries[2])
+	}
+}
+
+func TestConvertGitMirror(t *testing.T) {
+	entries, cleanup, err := ConvertMirrors([]MirrorEntry{
+		{Git: &GitMirror{
+			URLs: []GitRepo{
+				{URL: "https://gitlab.freedesktop.org/mesa/mesa"},
+				{URL: "https://example.com/repo.git", Name: "custom/name"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].GitURL != "https://gitlab.freedesktop.org/mesa/mesa" {
+		t.Fatalf("unexpected GitURL: %s", entries[0].GitURL)
+	}
+	if entries[0].Name != "" {
+		t.Fatalf("expected empty Name, got %s", entries[0].Name)
+	}
+	if entries[1].GitURL != "https://example.com/repo.git" {
+		t.Fatalf("unexpected GitURL: %s", entries[1].GitURL)
+	}
+	if entries[1].Name != "custom/name" {
+		t.Fatalf("unexpected Name: %s", entries[1].Name)
+	}
+}
+
+func TestConvertGitMirrorEmptyURL(t *testing.T) {
+	_, cleanup, err := ConvertMirrors([]MirrorEntry{
+		{Git: &GitMirror{
+			URLs: []GitRepo{
+				{URL: ""},
+			},
+		}},
+	})
+	defer cleanup()
+	if err == nil {
+		t.Fatal("expected error for empty url")
+	}
+}
+
+func TestGitRepoUnmarshalYAML(t *testing.T) {
+	input := []byte(`
+urls:
+  - https://example.com/plain.git
+  - url: https://example.com/named.git
+    name: custom/name
+`)
+	var m GitMirror
+	if err := yaml.Unmarshal(input, &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.URLs) != 2 {
+		t.Fatalf("expected 2 URLs, got %d", len(m.URLs))
+	}
+	if m.URLs[0].URL != "https://example.com/plain.git" {
+		t.Fatalf("unexpected URL: %s", m.URLs[0].URL)
+	}
+	if m.URLs[0].Name != "" {
+		t.Fatalf("expected empty Name, got %s", m.URLs[0].Name)
+	}
+	if m.URLs[1].URL != "https://example.com/named.git" {
+		t.Fatalf("unexpected URL: %s", m.URLs[1].URL)
+	}
+	if m.URLs[1].Name != "custom/name" {
+		t.Fatalf("unexpected Name: %s", m.URLs[1].Name)
 	}
 }
 

@@ -17,6 +17,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -60,6 +62,7 @@ type ConfigEntry struct {
 	ExcludeUserRepos       bool
 	Forks                  bool
 	Visibility             []string
+	GitURL                 string
 }
 
 func Randomize(entries []ConfigEntry) []ConfigEntry {
@@ -163,6 +166,7 @@ func PeriodicMirrorFile(ctx context.Context, repoDir, configFile string, interva
 		}
 
 		ExecuteMirror(lastCfg, repoDir, notify)
+		CleanupGitMirrorRepos(repoDir, lastCfg)
 
 		select {
 		case <-ctx.Done():
@@ -356,6 +360,23 @@ func ExecuteMirror(cfg []ConfigEntry, repoDir string, notify func(repoDir string
 			if c.Forks {
 				cmd.Args = append(cmd.Args, "-forks")
 			}
+		} else if c.GitURL != "" {
+			displayName := gitMirrorDisplayName(c)
+			destName := gitMirrorDirName(displayName)
+			gitDest := filepath.Join(repoDir, "git")
+
+			cmd = exec.Command("zoekt-simple-git-clone",
+				"-dest", gitDest,
+				"-dest-name", destName,
+				"-name", displayName,
+				c.GitURL,
+			)
+			// Bypass git rejecting repos owned by a different uid
+			cmd.Env = append(os.Environ(),
+				"GIT_CONFIG_COUNT=1",
+				"GIT_CONFIG_KEY_0=safe.directory",
+				"GIT_CONFIG_VALUE_0=*",
+			)
 		} else {
 			slog.Info("ExecuteMirror: ignoring config, no valid repository definition", "config", c)
 			continue
@@ -370,6 +391,56 @@ func ExecuteMirror(cfg []ConfigEntry, repoDir string, notify func(repoDir string
 
 			slog.Info("mirror discovered repo", "dir", string(fn))
 			notify(string(fn))
+		}
+	}
+
+}
+
+func gitMirrorDirName(displayName string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(displayName))
+}
+
+func gitMirrorDisplayName(c ConfigEntry) string {
+	if c.Name != "" {
+		return c.Name
+	}
+	u, err := url.Parse(c.GitURL)
+	if err != nil {
+		return c.GitURL
+	}
+	return filepath.Join(u.Host, strings.TrimSuffix(u.Path, ".git"))
+}
+
+// CleanupGitMirrorRepos removes bare repos under <repoDir>/git/ that are
+// no longer listed in the config. Must be called with the full config,
+// not a scoped subset.
+func CleanupGitMirrorRepos(repoDir string, cfg []ConfigEntry) {
+	gitDir := filepath.Join(repoDir, "git")
+
+	expected := map[string]bool{}
+	for _, c := range cfg {
+		if c.GitURL == "" {
+			continue
+		}
+		name := gitMirrorDisplayName(c)
+		expected[gitMirrorDirName(name)+".git"] = true
+	}
+
+	entries, err := os.ReadDir(gitDir)
+	if err != nil {
+		return // dir may not exist yet
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".git") {
+			continue
+		}
+		if expected[e.Name()] {
+			continue
+		}
+		path := filepath.Join(gitDir, e.Name())
+		slog.Info("removing stale git mirror repo", "path", path)
+		if err := os.RemoveAll(path); err != nil {
+			slog.Error("failed to remove stale git mirror repo", "path", path, "error", err)
 		}
 	}
 }

@@ -182,3 +182,12 @@ mirrors:
   #     url: https://git.savannah.gnu.org/cgit
   #     name: "^gnu/.*"                # regex include filter on repo name
   #     exclude: ".*-old$"             # regex exclude filter on repo name
+
+  # --- Plain Git ---
+
+  # - git:
+  #     urls:
+  #       - https://gitlab.freedesktop.org/mesa/mesa
+  #       - https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+  #       - url: https://example.com/repo.git  # with custom name
+  #         name: custom/repo-name
