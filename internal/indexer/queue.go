@@ -41,6 +41,12 @@ func (q *Queue) PushLow(req Request) {
 	}
 }
 
+// HighLen returns the current number of items in the high-priority queue.
+func (q *Queue) HighLen() int { return len(q.high) }
+
+// LowLen returns the current number of items in the low-priority queue.
+func (q *Queue) LowLen() int { return len(q.low) }
+
 // Next blocks until a request is available or ctx is cancelled.
 // High-priority requests are preferred over low-priority ones.
 func (q *Queue) Next(ctx context.Context) (Request, bool) {

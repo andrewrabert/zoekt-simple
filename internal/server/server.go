@@ -9,6 +9,7 @@ import (
 	"github.com/sourcegraph/zoekt"
 
 	"github.com/sourcegraph/zoekt-simple/internal/indexer"
+	"github.com/sourcegraph/zoekt-simple/internal/metrics"
 )
 
 const baseInstructions = `Code search across indexed repositories. Use search for finding code, get_file to retrieve file contents. Use output_mode="repos" to list repositories.
@@ -40,6 +41,9 @@ type Config struct {
 
 	// ExtraInstructions is appended to the base MCP instructions.
 	ExtraInstructions string
+
+	// Metrics is the shared metrics instance. May be nil if metrics are disabled.
+	Metrics *metrics.Metrics
 }
 
 // Server wraps the MCP server and provides HTTP handlers.
@@ -55,6 +59,7 @@ func New(cfg Config) *Server {
 		searcher: cfg.Searcher,
 		reposDir: cfg.ReposDir,
 		tracker:  &TaskTracker{tasks: make(map[string]*Task)},
+		metrics:  cfg.Metrics,
 	}
 
 	instr := baseInstructions
@@ -115,4 +120,5 @@ type app struct {
 	reposDir string
 	tracker  *TaskTracker
 	queue    *indexer.Queue
+	metrics  *metrics.Metrics
 }
