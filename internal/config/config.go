@@ -411,6 +411,21 @@ func gitMirrorDisplayName(c ConfigEntry) string {
 	return filepath.Join(u.Host, strings.TrimSuffix(u.Path, ".git"))
 }
 
+// CleanupDynamicRepo removes the bare repo directory under <repoDir>/git/
+// for a dynamic index identified by its display name.
+func CleanupDynamicRepo(repoDir string, displayName string) {
+	gitDir := filepath.Join(repoDir, "git")
+	dirName := gitMirrorDirName(displayName) + ".git"
+	path := filepath.Join(gitDir, dirName)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return
+	}
+	slog.Info("removing dynamic repo", "path", path)
+	if err := os.RemoveAll(path); err != nil {
+		slog.Error("failed to remove dynamic repo", "path", path, "error", err)
+	}
+}
+
 // CleanupGitMirrorRepos removes bare repos under <repoDir>/git/ that are
 // no longer listed in the config. Must be called with the full config,
 // not a scoped subset.

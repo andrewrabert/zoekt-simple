@@ -210,6 +210,13 @@ func main() {
 	docs.RegisterHandlers(mux)
 	static.RegisterHandlers(mux)
 
+	// Load dynamic index store.
+	dynamicStorePath := filepath.Join(dataDir, "dynamic_indexes.json")
+	dynamicStore, err := config.NewDynamicStore(dynamicStorePath)
+	if err != nil {
+		log.Fatalf("load dynamic store: %v", err)
+	}
+
 	// Create indexer with all targets.
 	idx := indexer.New(indexer.Options{
 		DataDir:        dataDir,
@@ -220,8 +227,13 @@ func main() {
 		CPUFraction:    yamlCfg.CPUFraction,
 		MaxLogAge:      yamlCfg.MaxLogAge,
 		MirrorEntries:  mirrorEntries,
+		DynamicStore:   dynamicStore,
 	}, defaultTracker)
 	defaultQueue(idx.Queue())
+
+	// Register indexes API.
+	indexesAPI := server.NewIndexesAPI(dynamicStore, indexes, idx.Queue(), dataDir)
+	indexesAPI.RegisterHandlers(mux)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

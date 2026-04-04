@@ -54,6 +54,7 @@ type Options struct {
 	CPUFraction    float64
 	MaxLogAge      time.Duration
 	MirrorEntries  []config.ConfigEntry
+	DynamicStore   *config.DynamicStore
 	// computed
 	cpuCount int
 	repoDir  string
@@ -157,20 +158,41 @@ func fetchGitRepo(dir string) error {
 	return cmd.Run()
 }
 
+// dynamicMirrorEntries returns ConfigEntry values for all dynamic indexes.
+func (idx *Indexer) dynamicMirrorEntries() []config.ConfigEntry {
+	if idx.opts.DynamicStore == nil {
+		return nil
+	}
+	var entries []config.ConfigEntry
+	for _, di := range idx.opts.DynamicStore.List() {
+		entries = append(entries, config.ConfigEntry{
+			GitURL: di.RepoURL,
+			Name:   di.Name,
+		})
+	}
+	return entries
+}
+
 // periodicMirror runs mirror operations on a schedule.
 // If MirrorEntries is set (from YAML config), it uses them directly.
 // Otherwise, it falls back to PeriodicMirrorFile which reads a JSON config.
+// Dynamic indexes are always included.
 func (idx *Indexer) periodicMirror(ctx context.Context) {
 	notify := func(dir string) {
 		idx.queue.PushLow(Request{RepoDir: dir})
 	}
 
-	if len(idx.opts.MirrorEntries) > 0 {
+	if len(idx.opts.MirrorEntries) > 0 || idx.opts.DynamicStore != nil {
 		ticker := time.NewTicker(idx.opts.MirrorInterval)
 		defer ticker.Stop()
 		for {
-			config.ExecuteMirror(idx.opts.MirrorEntries, idx.opts.repoDir, notify)
-			config.CleanupGitMirrorRepos(idx.opts.repoDir, idx.opts.MirrorEntries)
+			// Merge static and dynamic entries each iteration so newly added
+			// dynamic indexes are picked up.
+			allEntries := append([]config.ConfigEntry{}, idx.opts.MirrorEntries...)
+			allEntries = append(allEntries, idx.dynamicMirrorEntries()...)
+
+			config.ExecuteMirror(allEntries, idx.opts.repoDir, notify)
+			config.CleanupGitMirrorRepos(idx.opts.repoDir, allEntries)
 			select {
 			case <-ctx.Done():
 				return
