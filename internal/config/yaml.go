@@ -391,6 +391,33 @@ func hostFromURL(rawURL string) (string, error) {
 	return u.Hostname(), nil
 }
 
+// ImmutableFieldsChanged returns the names of immutable fields that differ
+// between old and new configs. These fields cannot be changed at runtime.
+func ImmutableFieldsChanged(old, new *YAMLConfig) []string {
+	var changed []string
+	if old.Listen != new.Listen {
+		changed = append(changed, "listen")
+	}
+	if old.DataDir != new.DataDir {
+		changed = append(changed, "data_dir")
+	}
+	if old.IndexDir != new.IndexDir {
+		changed = append(changed, "index_dir")
+	}
+	return changed
+}
+
+// Equal reports whether two configs are semantically identical.
+// It uses YAML round-tripping for a deep comparison.
+func (c *YAMLConfig) Equal(other *YAMLConfig) bool {
+	a, err1 := yaml.Marshal(c)
+	b, err2 := yaml.Marshal(other)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return string(a) == string(b)
+}
+
 // WriteNetrc writes a .netrc file from the given entries.
 func WriteNetrc(path string, entries []NetrcEntry) error {
 	var buf strings.Builder

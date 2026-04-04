@@ -24,10 +24,20 @@ import (
 	"github.com/sourcegraph/zoekt-simple/internal/config"
 	"github.com/sourcegraph/zoekt-simple/internal/docs"
 	"github.com/sourcegraph/zoekt-simple/internal/indexer"
+	"github.com/sourcegraph/zoekt-simple/internal/reload"
 	"github.com/sourcegraph/zoekt-simple/internal/server"
 	"github.com/sourcegraph/zoekt-simple/internal/static"
 	"github.com/sourcegraph/zoekt-simple/internal/ui"
 )
+
+// indexState holds all per-index runtime resources.
+type indexState struct {
+	mux       *http.ServeMux
+	streamers []zoekt.Streamer
+	targets   []indexer.IndexTarget
+	tracker   *server.TaskTracker
+	setQueue  func(q *indexer.Queue)
+}
 
 func envDefault(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok {
@@ -89,9 +99,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("convert mirrors: %v", err)
 	}
-	if credCleanup != nil {
-		defer credCleanup()
-	}
 
 	// Resolve indexes.
 	indexes := yamlCfg.ResolvedIndexes()
@@ -100,31 +107,106 @@ func main() {
 		log.Fatalf("default_index %q not found in indexes", defaultName)
 	}
 
-	// Build per-index streamers, servers, web UIs, and indexer targets.
-	var targets []indexer.IndexTarget
-	var streamers []zoekt.Streamer
-	// We need the first server's tracker for the indexer. Use the default index's server.
-	var defaultTracker *server.TaskTracker
-	var defaultQueue func(q *indexer.Queue)
+	// Build initial mux and state.
+	state, err := buildIndexState(dataDir, reposDir, indexes, defaultName, globalInstr)
+	if err != nil {
+		log.Fatalf("build index state: %v", err)
+	}
+
+	// Create indexer with all targets.
+	idx := indexer.New(indexer.Options{
+		DataDir:        dataDir,
+		Targets:        state.targets,
+		FetchInterval:  yamlCfg.FetchInterval,
+		MirrorInterval: yamlCfg.MirrorInterval,
+		IndexTimeout:   yamlCfg.IndexTimeout,
+		CPUFraction:    yamlCfg.CPUFraction,
+		MaxLogAge:      yamlCfg.MaxLogAge,
+		MirrorEntries:  mirrorEntries,
+	}, state.tracker)
+	state.setQueue(idx.Queue())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go idx.Run(ctx)
+
+	handler := reload.NewSwappableHandler(state.mux)
+
+	currentStreamers := state.streamers
+	currentCredCleanup := credCleanup
+
+	var reloader *reload.Reloader
+	reloader, err = reload.NewReloader(*configFile, func(old, new *config.YAMLConfig) error {
+		return applyReload(old, new, dataDir, reposDir, handler, idx, reloader,
+			&currentStreamers, &currentCredCleanup)
+	})
+	if err != nil {
+		log.Fatalf("config reloader: %v", err)
+	}
+	defer reloader.Stop()
+	defer func() {
+		for _, s := range currentStreamers {
+			s.Close()
+		}
+	}()
+	defer func() {
+		if currentCredCleanup != nil {
+			currentCredCleanup()
+		}
+	}()
+
+	registerReloadHandler(state.mux, reloader)
+
+	httpSrv := &http.Server{Addr: yamlCfg.Listen, Handler: handler}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		slog.Info("shutting down")
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		httpSrv.Shutdown(shutdownCtx)
+	}()
+
+	slog.Info("listening", "addr", yamlCfg.Listen)
+	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatalf("ListenAndServe: %v", err)
+	}
+}
+
+// buildIndexState creates the mux, streamers, targets, and related resources
+// for all configured indexes. It returns errors rather than calling log.Fatal,
+// making it safe to call during both startup and hot-reload.
+func buildIndexState(dataDir, reposDir string, indexes map[string]config.IndexConfig, defaultName, globalInstr string) (_ *indexState, retErr error) {
+	var st indexState
+	defer func() {
+		if retErr != nil {
+			for _, s := range st.streamers {
+				s.Close()
+			}
+		}
+	}()
 
 	mux := http.NewServeMux()
 
 	for name, idxCfg := range indexes {
 		indexDir := filepath.Join(dataDir, "index", name)
 		if err := os.MkdirAll(indexDir, 0o755); err != nil {
-			log.Fatalf("MkdirAll(%s): %v", indexDir, err)
+			return nil, fmt.Errorf("MkdirAll(%s): %w", indexDir, err)
 		}
 
 		streamer, err := search.NewDirectorySearcherFast(indexDir)
 		if err != nil {
-			log.Fatalf("NewDirectorySearcherFast(%s): %v", indexDir, err)
+			return nil, fmt.Errorf("NewDirectorySearcherFast(%s): %w", indexDir, err)
 		}
-		streamers = append(streamers, streamer)
+		st.streamers = append(st.streamers, streamer)
 
 		// Resolve per-index instructions with fallback to global.
 		instr, err := resolveInstructions(idxCfg.Instructions, idxCfg.InstrFile)
 		if err != nil {
-			log.Fatalf("instructions for index %q: %v", name, err)
+			return nil, fmt.Errorf("instructions for index %q: %w", name, err)
 		}
 		if instr == "" {
 			instr = globalInstr
@@ -151,7 +233,7 @@ func main() {
 		}
 		webMux, err := web.NewMux(webServer)
 		if err != nil {
-			log.Fatalf("web.NewMux for index %q: %v", name, err)
+			return nil, fmt.Errorf("web.NewMux for index %q: %w", name, err)
 		}
 		indexMux.Handle("/", webMux)
 
@@ -159,8 +241,8 @@ func main() {
 
 		// Default index also serves at root.
 		if name == defaultName {
-			defaultTracker = srv.Tracker()
-			defaultQueue = func(q *indexer.Queue) { srv.SetQueue(q) }
+			st.tracker = srv.Tracker()
+			st.setQueue = func(q *indexer.Queue) { srv.SetQueue(q) }
 
 			rootMux := http.NewServeMux()
 			srv.RegisterHandlers(rootMux)
@@ -178,9 +260,9 @@ func main() {
 		// Compile indexer target.
 		target, err := compileTarget(name, indexDir, idxCfg)
 		if err != nil {
-			log.Fatalf("compile target %q: %v", name, err)
+			return nil, fmt.Errorf("compile target %q: %w", name, err)
 		}
-		targets = append(targets, target)
+		st.targets = append(st.targets, target)
 
 		slog.Info("configured index", "name", name, "dir", indexDir, "default", name == defaultName)
 	}
@@ -210,47 +292,110 @@ func main() {
 	docs.RegisterHandlers(mux)
 	static.RegisterHandlers(mux)
 
-	// Create indexer with all targets.
-	idx := indexer.New(indexer.Options{
-		DataDir:        dataDir,
-		Targets:        targets,
-		FetchInterval:  yamlCfg.FetchInterval,
-		MirrorInterval: yamlCfg.MirrorInterval,
-		IndexTimeout:   yamlCfg.IndexTimeout,
-		CPUFraction:    yamlCfg.CPUFraction,
-		MaxLogAge:      yamlCfg.MaxLogAge,
-		MirrorEntries:  mirrorEntries,
-	}, defaultTracker)
-	defaultQueue(idx.Queue())
+	st.mux = mux
+	return &st, nil
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go idx.Run(ctx)
-
-	httpSrv := &http.Server{Addr: yamlCfg.Listen, Handler: mux}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigCh
-		slog.Info("shutting down")
-		cancel()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-		httpSrv.Shutdown(shutdownCtx)
-	}()
-
-	// Close all streamers on exit.
-	defer func() {
-		for _, s := range streamers {
-			s.Close()
+// registerReloadHandler adds the POST /api/reload endpoint to the mux.
+func registerReloadHandler(mux *http.ServeMux, reloader *reload.Reloader) {
+	mux.HandleFunc("POST /api/reload", func(w http.ResponseWriter, r *http.Request) {
+		if err := reloader.Reload(); err != nil {
+			slog.Error("POST /api/reload failed", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-	}()
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
 
-	slog.Info("listening", "addr", yamlCfg.Listen)
-	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatalf("ListenAndServe: %v", err)
+// applyReload rebuilds the mux, reconfigures the indexer, regenerates netrc
+// and credentials, then atomically swaps the HTTP handler.
+func applyReload(
+	old, new *config.YAMLConfig,
+	dataDir, reposDir string,
+	handler *reload.SwappableHandler,
+	idx *indexer.Indexer,
+	reloader *reload.Reloader,
+	oldStreamers *[]zoekt.Streamer,
+	credCleanup *func(),
+) error {
+	// Resolve global instructions.
+	globalInstr, err := resolveInstructions(new.Instructions, new.InstrFile)
+	if err != nil {
+		return fmt.Errorf("global instructions: %w", err)
 	}
+
+	// Regenerate netrc.
+	netrcEntries, err := config.NetrcEntries(new.Mirrors)
+	if err != nil {
+		return fmt.Errorf("netrc entries: %w", err)
+	}
+	if len(netrcEntries) > 0 {
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			home = "/root"
+		}
+		if err := config.WriteNetrc(filepath.Join(home, ".netrc"), netrcEntries); err != nil {
+			return fmt.Errorf("write netrc: %w", err)
+		}
+	}
+
+	// Convert mirrors.
+	mirrorEntries, newCredCleanup, err := config.ConvertMirrors(new.Mirrors)
+	if err != nil {
+		return fmt.Errorf("convert mirrors: %w", err)
+	}
+	if newCredCleanup == nil {
+		newCredCleanup = func() {}
+	}
+
+	// Resolve indexes.
+	indexes := new.ResolvedIndexes()
+	defaultName := new.ResolvedDefaultIndex()
+	if _, ok := indexes[defaultName]; !ok {
+		newCredCleanup()
+		return fmt.Errorf("default_index %q not found in indexes", defaultName)
+	}
+
+	// Build new mux and state.
+	state, err := buildIndexState(dataDir, reposDir, indexes, defaultName, globalInstr)
+	if err != nil {
+		newCredCleanup()
+		return fmt.Errorf("build index state: %w", err)
+	}
+
+	// Reconfigure indexer.
+	idx.Reconfigure(indexer.Options{
+		DataDir:        dataDir,
+		Targets:        state.targets,
+		FetchInterval:  new.FetchInterval,
+		MirrorInterval: new.MirrorInterval,
+		IndexTimeout:   new.IndexTimeout,
+		CPUFraction:    new.CPUFraction,
+		MaxLogAge:      new.MaxLogAge,
+		MirrorEntries:  mirrorEntries,
+	})
+	state.setQueue(idx.Queue())
+
+	// Register reload endpoint on the new mux before swapping.
+	registerReloadHandler(state.mux, reloader)
+
+	// Swap the handler atomically.
+	handler.Swap(state.mux)
+
+	// Close old streamers.
+	for _, s := range *oldStreamers {
+		s.Close()
+	}
+	*oldStreamers = state.streamers
+
+	// Clean up old credential files.
+	if *credCleanup != nil {
+		(*credCleanup)()
+	}
+	*credCleanup = newCredCleanup
+
+	return nil
 }
 
 func resolveInstructions(text, filePath string) (string, error) {

@@ -446,6 +446,40 @@ urls:
 	}
 }
 
+func TestImmutableFieldsChanged(t *testing.T) {
+	old := &YAMLConfig{Listen: ":8000", DataDir: "/data", IndexDir: "/idx"}
+	same := &YAMLConfig{Listen: ":8000", DataDir: "/data", IndexDir: "/idx"}
+	diff := &YAMLConfig{Listen: ":9000", DataDir: "/other", IndexDir: "/idx"}
+
+	if fields := ImmutableFieldsChanged(old, same); len(fields) != 0 {
+		t.Fatalf("expected no changes, got %v", fields)
+	}
+	fields := ImmutableFieldsChanged(old, diff)
+	if len(fields) != 2 {
+		t.Fatalf("expected 2 changed fields, got %v", fields)
+	}
+	found := map[string]bool{}
+	for _, f := range fields {
+		found[f] = true
+	}
+	if !found["listen"] || !found["data_dir"] {
+		t.Fatalf("expected listen and data_dir, got %v", fields)
+	}
+}
+
+func TestYAMLConfigEqual(t *testing.T) {
+	a := &YAMLConfig{Listen: ":8000", FetchInterval: 5 * time.Minute}
+	b := &YAMLConfig{Listen: ":8000", FetchInterval: 5 * time.Minute}
+	c := &YAMLConfig{Listen: ":8000", FetchInterval: 10 * time.Minute}
+
+	if !a.Equal(b) {
+		t.Fatal("expected a == b")
+	}
+	if a.Equal(c) {
+		t.Fatal("expected a != c")
+	}
+}
+
 func TestWriteNetrc(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".netrc")
 	err := WriteNetrc(path, []NetrcEntry{

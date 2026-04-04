@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
@@ -47,7 +48,6 @@ type CompiledInclude struct {
 type Options struct {
 	DataDir        string
 	Targets        []IndexTarget
-	MirrorConfig   string
 	FetchInterval  time.Duration
 	MirrorInterval time.Duration
 	IndexTimeout   time.Duration
@@ -91,6 +91,7 @@ func (o *Options) validate() {
 
 // Indexer manages periodic mirroring, fetching, and indexing of git repos.
 type Indexer struct {
+	mu      sync.RWMutex
 	opts    Options
 	queue   *Queue
 	tracker TaskUpdater
@@ -111,6 +112,26 @@ func (idx *Indexer) Queue() *Queue {
 	return idx.queue
 }
 
+// Reconfigure atomically replaces the indexer's options.
+func (idx *Indexer) Reconfigure(opts Options) {
+	opts.validate()
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.opts = opts
+}
+
+// CurrentOptions returns a snapshot of the current options.
+func (idx *Indexer) CurrentOptions() Options {
+	return idx.lockedOpts()
+}
+
+// lockedOpts returns a snapshot of the current options under the read lock.
+func (idx *Indexer) lockedOpts() Options {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.opts
+}
+
 // Run starts all background loops. It blocks until ctx is cancelled.
 // It launches goroutines for periodicMirror, deleteOrphanIndexes,
 // deleteLogsLoop, and indexPending. The calling goroutine runs periodicFetch.
@@ -126,11 +147,17 @@ func (idx *Indexer) Run(ctx context.Context) {
 // periodicFetch discovers git repos under DataDir/repos, runs git fetch on
 // each, and pushes them onto the low-priority queue.
 func (idx *Indexer) periodicFetch(ctx context.Context) {
-	ticker := time.NewTicker(idx.opts.FetchInterval)
+	curInterval := idx.lockedOpts().FetchInterval
+	ticker := time.NewTicker(curInterval)
 	defer ticker.Stop()
 
 	for {
-		repos, err := gitindex.FindGitRepos(idx.opts.repoDir)
+		opts := idx.lockedOpts()
+		if opts.FetchInterval != curInterval {
+			ticker.Reset(opts.FetchInterval)
+			curInterval = opts.FetchInterval
+		}
+		repos, err := gitindex.FindGitRepos(opts.repoDir)
 		if err != nil {
 			slog.Error("FindGitRepos", "error", err)
 		} else {
@@ -158,30 +185,33 @@ func fetchGitRepo(dir string) error {
 }
 
 // periodicMirror runs mirror operations on a schedule.
-// If MirrorEntries is set (from YAML config), it uses them directly.
-// Otherwise, it falls back to PeriodicMirrorFile which reads a JSON config.
+// It re-reads options each iteration so that mirrors added via hot-reload
+// are picked up even if the server started with none.
 func (idx *Indexer) periodicMirror(ctx context.Context) {
 	notify := func(dir string) {
 		idx.queue.PushLow(Request{RepoDir: dir})
 	}
 
-	if len(idx.opts.MirrorEntries) > 0 {
-		ticker := time.NewTicker(idx.opts.MirrorInterval)
-		defer ticker.Stop()
-		for {
-			config.ExecuteMirror(idx.opts.MirrorEntries, idx.opts.repoDir, notify)
-			config.CleanupGitMirrorRepos(idx.opts.repoDir, idx.opts.MirrorEntries)
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
+	curInterval := idx.lockedOpts().MirrorInterval
+	ticker := time.NewTicker(curInterval)
+	defer ticker.Stop()
+
+	for {
+		opts := idx.lockedOpts()
+		if opts.MirrorInterval != curInterval {
+			ticker.Reset(opts.MirrorInterval)
+			curInterval = opts.MirrorInterval
+		}
+		if len(opts.MirrorEntries) > 0 {
+			config.ExecuteMirror(opts.MirrorEntries, opts.repoDir, notify)
+			config.CleanupGitMirrorRepos(opts.repoDir, opts.MirrorEntries)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
-	if idx.opts.MirrorConfig == "" {
-		return
-	}
-	config.PeriodicMirrorFile(ctx, idx.opts.repoDir, idx.opts.MirrorConfig, idx.opts.MirrorInterval, notify)
 }
 
 // indexPending consumes from the queue and indexes each repo into all matching targets.
@@ -191,6 +221,8 @@ func (idx *Indexer) indexPending(ctx context.Context) {
 		if !ok {
 			return
 		}
+
+		opts := idx.lockedOpts()
 
 		if req.TaskID != "" {
 			idx.tracker.Update(req.TaskID, "running", nil)
@@ -212,19 +244,19 @@ func (idx *Indexer) indexPending(ctx context.Context) {
 
 		// Derive repo name once for all targets.
 		repoName := ""
-		if rel, err := filepath.Rel(idx.opts.repoDir, req.RepoDir); err == nil {
+		if rel, err := filepath.Rel(opts.repoDir, req.RepoDir); err == nil {
 			repoName = strings.TrimSuffix(rel, ".git")
 		}
 
 		var firstErr error
-		for i := range idx.opts.Targets {
-			if err := idx.indexRepoForTarget(req.RepoDir, repoName, &idx.opts.Targets[i]); err != nil && firstErr == nil {
+		for i := range opts.Targets {
+			if err := idx.indexRepoForTarget(req.RepoDir, repoName, &opts.Targets[i]); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
 
 		// Clean up any leftover .tmp files across all target index dirs.
-		for _, t := range idx.opts.Targets {
+		for _, t := range opts.Targets {
 			if tmps, globErr := filepath.Glob(filepath.Join(t.IndexDir, "*.tmp")); globErr == nil {
 				for _, tmp := range tmps {
 					os.Remove(tmp)
@@ -254,14 +286,15 @@ func (idx *Indexer) mirrorSingleRepo(repo string) error {
 	}
 	owner, repoName := parts[1], parts[2]
 
+	opts := idx.lockedOpts()
 	// Find a matching mirror entry.
-	for _, entry := range idx.opts.MirrorEntries {
+	for _, entry := range opts.MirrorEntries {
 		if entry.GithubOrg == owner || entry.GithubUser == owner {
 			// Create a copy scoped to just this repo.
 			scoped := entry
 			scoped.Name = "^" + repoName + "$"
 			slog.Info("mirroring single repo", "repo", repo, "owner", owner, "name", repoName)
-			config.ExecuteMirror([]config.ConfigEntry{scoped}, idx.opts.repoDir, func(string) {})
+			config.ExecuteMirror([]config.ConfigEntry{scoped}, opts.repoDir, func(string) {})
 			return nil
 		}
 	}
@@ -293,15 +326,16 @@ func (idx *Indexer) indexRepoForTarget(dir, repoName string, target *IndexTarget
 		return nil
 	}
 
+	idxOpts := idx.lockedOpts()
 	slog.Info("indexing", "repo", repoName, "target", target.Name, "branches", branches)
 
 	opts := gitindex.Options{
 		RepoDir:      dir,
 		Incremental:  true,
-		RepoCacheDir: idx.opts.repoDir,
+		RepoCacheDir: idxOpts.repoDir,
 		BuildOptions: index.Options{
 			IndexDir:         target.IndexDir,
-			Parallelism:      idx.opts.cpuCount,
+			Parallelism:      idxOpts.cpuCount,
 			CTagsMustSucceed: true,
 			CTagsPath:        findCTags(),
 		},
@@ -334,9 +368,9 @@ func (idx *Indexer) indexRepoForTarget(dir, repoName string, target *IndexTarget
 			slog.Info("indexRepo done", "dir", dir, "target", target.Name)
 		}
 		return res.err
-	case <-time.After(idx.opts.IndexTimeout):
-		slog.Error("indexRepo timeout", "dir", dir, "target", target.Name, "timeout", idx.opts.IndexTimeout)
-		return fmt.Errorf("index timeout after %s for %s", idx.opts.IndexTimeout, dir)
+	case <-time.After(idxOpts.IndexTimeout):
+		slog.Error("indexRepo timeout", "dir", dir, "target", target.Name, "timeout", idxOpts.IndexTimeout)
+		return fmt.Errorf("index timeout after %s for %s", idxOpts.IndexTimeout, dir)
 	}
 }
 
@@ -433,12 +467,13 @@ func (idx *Indexer) deleteOrphanIndexes(ctx context.Context) {
 }
 
 func (idx *Indexer) deleteOrphans() {
-	for i := range idx.opts.Targets {
-		idx.deleteOrphansForTarget(&idx.opts.Targets[i])
+	opts := idx.lockedOpts()
+	for i := range opts.Targets {
+		idx.deleteOrphansForTarget(&opts.Targets[i], opts.repoDir)
 	}
 }
 
-func (idx *Indexer) deleteOrphansForTarget(target *IndexTarget) {
+func (idx *Indexer) deleteOrphansForTarget(target *IndexTarget, repoDir string) {
 	shards, err := filepath.Glob(filepath.Join(target.IndexDir, "*.zoekt"))
 	if err != nil {
 		slog.Error("glob index shards", "error", err)
@@ -462,7 +497,7 @@ func (idx *Indexer) deleteOrphansForTarget(target *IndexTarget) {
 			if _, err := os.Stat(repo.Source); os.IsNotExist(err) {
 				// Bare repo no longer exists on disk.
 				shouldDelete = true
-			} else if rel, err := filepath.Rel(idx.opts.repoDir, repo.Source); err == nil {
+			} else if rel, err := filepath.Rel(repoDir, repo.Source); err == nil {
 				// Bare repo exists but may no longer belong to this target.
 				repoName := strings.TrimSuffix(rel, ".git")
 				if !targetIncludesRepo(repoName, target) {
@@ -502,7 +537,8 @@ func (idx *Indexer) deleteLogsLoop(ctx context.Context) {
 }
 
 func (idx *Indexer) deleteLogs() {
-	logDir := filepath.Join(idx.opts.DataDir, "log")
+	opts := idx.lockedOpts()
+	logDir := filepath.Join(opts.DataDir, "log")
 	entries, err := os.ReadDir(logDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -511,7 +547,7 @@ func (idx *Indexer) deleteLogs() {
 		return
 	}
 
-	cutoff := time.Now().Add(-idx.opts.MaxLogAge)
+	cutoff := time.Now().Add(-opts.MaxLogAge)
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil {
