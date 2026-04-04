@@ -25,4 +25,4 @@ ENV ZOEKT_LISTEN=:8000
 EXPOSE 8000
 
 ENTRYPOINT ["tini", "--"]
-CMD ["zoekt-server"]
+CMD ["zoekt-unified", "serve"]
