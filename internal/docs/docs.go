@@ -1,12 +1,21 @@
 package docs
 
 import (
-	_ "embed"
 	"net/http"
+	"sync"
 )
 
-//go:embed openapi.yaml
-var openapiSpec []byte
+var (
+	specOnce sync.Once
+	specYAML []byte
+)
+
+func generatedSpec() []byte {
+	specOnce.Do(func() {
+		specYAML = GenerateOpenAPI(DefaultSpec())
+	})
+	return specYAML
+}
 
 const docsPage = `<!doctype html>
 <html lang="en">
@@ -34,6 +43,6 @@ func RegisterHandlers(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /docs/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-		w.Write(openapiSpec)
+		w.Write(generatedSpec())
 	})
 }
