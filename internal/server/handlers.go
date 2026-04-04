@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -25,6 +26,8 @@ type searchArgs struct {
 }
 
 func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args searchArgs) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+
 	maxResults := args.MaxResults
 	if maxResults == 0 {
 		maxResults = 50
@@ -38,6 +41,7 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 
 	q, err := query.Parse(args.Query)
 	if err != nil {
+		a.observeSearch(outputMode, start, err)
 		return nil, nil, fmt.Errorf("invalid query: %v", err)
 	}
 
@@ -60,6 +64,7 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 		repoList, err := a.searcher.List(ctx, q, nil)
 		if err != nil {
 			slog.Error("list failed", "query", args.Query, "error", err)
+			a.observeSearch(outputMode, start, err)
 			return nil, nil, fmt.Errorf("list failed: %v", err)
 		}
 		repos := make([]string, 0, len(repoList.Repos))
@@ -75,6 +80,7 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 			"results":       repos,
 		}
 		b, _ := json.Marshal(meta)
+		a.observeSearch(outputMode, start, nil)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(b)}},
 		}, nil, nil
@@ -86,6 +92,7 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 	})
 	if err != nil {
 		slog.Error("search failed", "query", args.Query, "error", err)
+		a.observeSearch(outputMode, start, err)
 		return nil, nil, fmt.Errorf("search failed: %v", err)
 	}
 
@@ -93,9 +100,17 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 	returned := len(result.Files)
 	slog.Info("search complete", "query", args.Query, "total", total, "returned", returned)
 
+	a.observeSearch(outputMode, start, nil)
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: formatSearchResult(result, outputMode)}},
 	}, nil, nil
+}
+
+// observeSearch records search metrics if metrics are configured.
+func (a *app) observeSearch(outputMode string, start time.Time, err error) {
+	if a.metrics != nil {
+		a.metrics.ObserveSearch(outputMode, time.Since(start), err)
+	}
 }
 
 type getFileArgs struct {

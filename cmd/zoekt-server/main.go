@@ -18,12 +18,14 @@ import (
 	"time"
 
 	"github.com/sourcegraph/zoekt"
+	"github.com/sourcegraph/zoekt/query"
 	"github.com/sourcegraph/zoekt/search"
 	"github.com/sourcegraph/zoekt/web"
 
 	"github.com/sourcegraph/zoekt-simple/internal/config"
 	"github.com/sourcegraph/zoekt-simple/internal/docs"
 	"github.com/sourcegraph/zoekt-simple/internal/indexer"
+	"github.com/sourcegraph/zoekt-simple/internal/metrics"
 	"github.com/sourcegraph/zoekt-simple/internal/server"
 	"github.com/sourcegraph/zoekt-simple/internal/static"
 	"github.com/sourcegraph/zoekt-simple/internal/ui"
@@ -107,6 +109,10 @@ func main() {
 	var defaultTracker *server.TaskTracker
 	var defaultQueue func(q *indexer.Queue)
 
+	// Metrics are initialized here; queue length gauges are registered after
+	// the indexer is created (see below).
+	m := metrics.New()
+
 	mux := http.NewServeMux()
 
 	for name, idxCfg := range indexes {
@@ -134,6 +140,7 @@ func main() {
 			Searcher:          streamer,
 			ReposDir:          reposDir,
 			ExtraInstructions: instr,
+			Metrics:           m,
 		})
 
 		// Mount MCP at /index/<name>/mcp
@@ -222,12 +229,37 @@ func main() {
 		MirrorEntries:  mirrorEntries,
 	}, defaultTracker)
 	defaultQueue(idx.Queue())
+	idx.SetMetrics(m)
+	m.RegisterQueueMetrics(
+		func() float64 { return float64(idx.Queue().HighLen()) },
+		func() float64 { return float64(idx.Queue().LowLen()) },
+	)
+
+	// Register /metrics endpoint.
+	mux.Handle("GET /metrics", m.Handler())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go idx.Run(ctx)
 
-	httpSrv := &http.Server{Addr: yamlCfg.Listen, Handler: mux}
+	// Background goroutine to periodically update index stats gauges.
+	go updateIndexStats(ctx, streamers, m)
+
+	// Wrap the mux with HTTP metrics middleware. The path labeler normalizes
+	// dynamic segments to avoid high-cardinality labels.
+	handler := m.Wrap(func(r *http.Request) string {
+		p := r.URL.Path
+		switch {
+		case strings.HasPrefix(p, "/api/reindex/"):
+			return "/api/reindex/{taskID}"
+		case strings.HasPrefix(p, "/index/"):
+			return "/index/{name}/..."
+		default:
+			return p
+		}
+	}, mux)
+
+	httpSrv := &http.Server{Addr: yamlCfg.Listen, Handler: handler}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -299,6 +331,44 @@ func compileTarget(name, indexDir string, cfg config.IndexConfig) (indexer.Index
 	}
 
 	return t, nil
+}
+
+// updateIndexStats periodically queries all streamers for repository stats
+// and updates the corresponding Prometheus gauges.
+func updateIndexStats(ctx context.Context, streamers []zoekt.Streamer, m *metrics.Metrics) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	update := func() {
+		var totalRepos, totalShards, totalDocs int
+		for _, s := range streamers {
+			repoList, err := s.List(ctx, &query.Const{Value: true}, nil)
+			if err != nil {
+				slog.Warn("metrics: list repos", "error", err)
+				continue
+			}
+			totalRepos += len(repoList.Repos)
+			for _, r := range repoList.Repos {
+				totalShards += int(r.Stats.Shards)
+				totalDocs += int(r.Stats.Documents)
+			}
+		}
+		m.IndexRepos.Set(float64(totalRepos))
+		m.IndexShards.Set(float64(totalShards))
+		m.IndexDocuments.Set(float64(totalDocs))
+	}
+
+	// Initial update.
+	update()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			update()
+		}
+	}
 }
 
 func buildIndexPage(names []string, defaultName string) string {

@@ -19,6 +19,7 @@ import (
 	"github.com/sourcegraph/zoekt/index"
 
 	"github.com/sourcegraph/zoekt-simple/internal/config"
+	"github.com/sourcegraph/zoekt-simple/internal/metrics"
 )
 
 const day = time.Hour * 24
@@ -94,6 +95,7 @@ type Indexer struct {
 	opts    Options
 	queue   *Queue
 	tracker TaskUpdater
+	metrics *metrics.Metrics
 }
 
 // New creates an Indexer with the given options and task updater.
@@ -104,6 +106,11 @@ func New(opts Options, tracker TaskUpdater) *Indexer {
 		queue:   NewQueue(),
 		tracker: tracker,
 	}
+}
+
+// SetMetrics sets the metrics instance for the indexer.
+func (idx *Indexer) SetMetrics(m *metrics.Metrics) {
+	idx.metrics = m
 }
 
 // Queue returns the index queue used by this indexer.
@@ -216,11 +223,15 @@ func (idx *Indexer) indexPending(ctx context.Context) {
 			repoName = strings.TrimSuffix(rel, ".git")
 		}
 
+		indexStart := time.Now()
 		var firstErr error
 		for i := range idx.opts.Targets {
 			if err := idx.indexRepoForTarget(req.RepoDir, repoName, &idx.opts.Targets[i]); err != nil && firstErr == nil {
 				firstErr = err
 			}
+		}
+		if idx.metrics != nil {
+			idx.metrics.ObserveIndexRun(time.Since(indexStart), firstErr)
 		}
 
 		// Clean up any leftover .tmp files across all target index dirs.
