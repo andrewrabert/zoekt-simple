@@ -7,7 +7,10 @@ COPY zoekt/ zoekt/
 RUN go mod download
 COPY internal/ internal/
 COPY cmd/ cmd/
-RUN go install ./cmd/...
+COPY VERSION VERSION
+ARG VERSION=dev
+ARG UPSTREAM_COMMIT=unknown
+RUN go install -ldflags "-X github.com/sourcegraph/zoekt-simple/internal/buildinfo.Version=${VERSION} -X github.com/sourcegraph/zoekt-simple/internal/buildinfo.UpstreamCommit=${UPSTREAM_COMMIT}" ./cmd/...
 WORKDIR /app/zoekt
 RUN go install ./cmd/...
 

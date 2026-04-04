@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log"
 
+	"github.com/sourcegraph/zoekt-simple/internal/buildinfo"
 	"github.com/sourcegraph/zoekt/web"
 )
 
@@ -422,6 +423,14 @@ disallow: /search
 }
 
 func init() {
+	// Inject the zoekt-simple version into the footer template at init time.
+	// This is safe because the version is set once via ldflags and never changes.
+	ver := buildinfo.Version
+	if ver != "dev" {
+		TemplateText["footerBoilerplate"] += `
+<span class="navbar-text navbar-right"><small>zoekt-simple ` + template.HTMLEscapeString(ver) + `</small></span>`
+	}
+
 	for k, v := range TemplateText {
 		_, err := Top.New(k).Parse(v)
 		if err != nil {

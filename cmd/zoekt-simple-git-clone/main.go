@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sourcegraph/zoekt-simple/internal/buildinfo"
 	"github.com/sourcegraph/zoekt/gitindex"
 )
 
@@ -19,7 +20,14 @@ func main() {
 	dest := flag.String("dest", "", "destination directory")
 	nameFlag := flag.String("name", "", "name of repository (sets zoekt.name)")
 	destNameFlag := flag.String("dest-name", "", "directory name for the bare repo under -dest (overrides -name for filesystem path)")
+	showVersion := flag.Bool("version", false, "print version information and exit")
 	flag.Parse()
+
+	if *showVersion {
+		info := buildinfo.Info()
+		fmt.Printf("zoekt-simple-git-clone %s (upstream zoekt %s)\n", info.Version, info.UpstreamCommit)
+		os.Exit(0)
+	}
 
 	if *dest == "" {
 		log.Fatal("must set --dest")
