@@ -17,4 +17,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - run: go test ./...
+      - name: Generate upstream overlay
+        run: go run ./internal/upstream/generate.go
+
+      - name: Test
+        run: go test -overlay=overlay.json -vet=off ./internal/... ./cmd/...

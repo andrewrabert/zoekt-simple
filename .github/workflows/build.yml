@@ -65,6 +65,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Generate upstream overlay
+        run: go run ./internal/upstream/generate.go
+
       - name: Build binaries
         env:
           GOOS: ${{ matrix.goos }}
@@ -72,7 +75,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           mkdir -p build/
-          go build -o build/ ./cmd/...
+          go build -overlay=overlay.json -o build/ ./cmd/...
           cd zoekt && go build -o ../build/ ./cmd/...
 
       - name: Create archive
