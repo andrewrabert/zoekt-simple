@@ -7,7 +7,9 @@ COPY zoekt/ zoekt/
 RUN go mod download
 COPY internal/ internal/
 COPY cmd/ cmd/
-RUN go install ./cmd/...
+# Generate upstream wrapper packages and build overlay, then build with it.
+RUN go run ./internal/upstream/generate.go && \
+    go install -overlay=overlay.json ./cmd/...
 WORKDIR /app/zoekt
 RUN go install ./cmd/...
 

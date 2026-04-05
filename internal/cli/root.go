@@ -18,5 +18,10 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newGetFileCmd())
 	rootCmd.AddCommand(newGitCloneCmd())
 
+	// Add all upstream zoekt commands as subcommands.
+	for _, cmd := range upstreamCommands() {
+		rootCmd.AddCommand(cmd)
+	}
+
 	return rootCmd
 }
