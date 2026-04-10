@@ -402,6 +402,72 @@ func TestConvertGitMirror(t *testing.T) {
 	if entries[1].Name != "custom/name" {
 		t.Fatalf("unexpected Name: %s", entries[1].Name)
 	}
+
+	// Verify WebURL is nil when omitted.
+	if entries[0].WebURL != nil {
+		t.Fatalf("expected nil WebURL, got %v", entries[0].WebURL)
+	}
+}
+
+func TestConvertGitMirrorWebURL(t *testing.T) {
+	webURL1 := "https://git.internal.com/org/repo"
+	webURL2 := "https://docs.example.com"
+	entries, cleanup, err := ConvertMirrors([]MirrorEntry{
+		{Git: &GitMirror{
+			URLs: []GitRepo{
+				{
+					URL:    "https://git.internal.com/org/repo.git",
+					Name:   "internal/repo",
+					WebURL: &webURL1,
+				},
+				{
+					URL:    "/usr/lib/docs",
+					Name:   "docs",
+					WebURL: &webURL2,
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].WebURL == nil || *entries[0].WebURL != "https://git.internal.com/org/repo" {
+		t.Fatalf("unexpected WebURL: %v", entries[0].WebURL)
+	}
+	if entries[1].WebURL == nil || *entries[1].WebURL != "https://docs.example.com" {
+		t.Fatalf("unexpected WebURL: %v", entries[1].WebURL)
+	}
+}
+
+func TestConvertGitMirrorWebURLEmpty(t *testing.T) {
+	empty := ""
+	entries, cleanup, err := ConvertMirrors([]MirrorEntry{
+		{Git: &GitMirror{
+			URLs: []GitRepo{
+				{
+					URL:    "https://example.com/repo.git",
+					Name:   "repo",
+					WebURL: &empty,
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if entries[0].WebURL == nil {
+		t.Fatal("expected non-nil WebURL for explicit empty string")
+	}
+	if *entries[0].WebURL != "" {
+		t.Fatalf("expected empty WebURL, got %s", *entries[0].WebURL)
+	}
 }
 
 func TestConvertGitMirrorEmptyURL(t *testing.T) {
@@ -424,13 +490,16 @@ urls:
   - https://example.com/plain.git
   - url: https://example.com/named.git
     name: custom/name
+  - url: https://git.internal.com/org/repo.git
+    name: internal/repo
+    web_url: https://git.internal.com/org/repo
 `)
 	var m GitMirror
 	if err := yaml.Unmarshal(input, &m); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.URLs) != 2 {
-		t.Fatalf("expected 2 URLs, got %d", len(m.URLs))
+	if len(m.URLs) != 3 {
+		t.Fatalf("expected 3 URLs, got %d", len(m.URLs))
 	}
 	if m.URLs[0].URL != "https://example.com/plain.git" {
 		t.Fatalf("unexpected URL: %s", m.URLs[0].URL)
@@ -443,6 +512,12 @@ urls:
 	}
 	if m.URLs[1].Name != "custom/name" {
 		t.Fatalf("unexpected Name: %s", m.URLs[1].Name)
+	}
+	if m.URLs[0].WebURL != nil {
+		t.Fatalf("expected nil WebURL for plain URL, got %v", m.URLs[0].WebURL)
+	}
+	if m.URLs[2].WebURL == nil || *m.URLs[2].WebURL != "https://git.internal.com/org/repo" {
+		t.Fatalf("unexpected WebURL: %v", m.URLs[2].WebURL)
 	}
 }
 

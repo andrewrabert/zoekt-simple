@@ -173,8 +173,9 @@ type GitMirror struct {
 
 // GitRepo can be a plain URL string or an object with url and name.
 type GitRepo struct {
-	URL  string `yaml:"url"`
-	Name string `yaml:"name"`
+	URL    string  `yaml:"url"`
+	Name   string  `yaml:"name"`
+	WebURL *string `yaml:"web_url"`
 }
 
 func (g *GitRepo) UnmarshalYAML(unmarshal func(interface{}) error) error {
@@ -585,7 +586,11 @@ func ConvertMirrors(mirrors []MirrorEntry) ([]ConfigEntry, func(), error) {
 				if r.URL == "" {
 					return nil, cleanup, fmt.Errorf("git mirror: empty url")
 				}
-				entries = append(entries, ConfigEntry{GitURL: r.URL, Name: r.Name})
+				entries = append(entries, ConfigEntry{
+					GitURL: r.URL,
+					Name:   r.Name,
+					WebURL: r.WebURL,
+				})
 			}
 			continue
 

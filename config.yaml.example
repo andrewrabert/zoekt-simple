@@ -191,3 +191,10 @@ mirrors:
   #       - https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
   #       - url: https://example.com/repo.git  # with custom name
   #         name: custom/repo-name
+  #       - url: /path/to/local/repo           # local git repo
+  #         name: my-local-repo
+  #         web_url: https://github.com/org/repo  # override auto-derived web URL
+  #
+  # web_url controls the clickable repo link in the web UI.
+  # By default, it is auto-derived from the clone URL.
+  # Set web_url: "" to disable the link.

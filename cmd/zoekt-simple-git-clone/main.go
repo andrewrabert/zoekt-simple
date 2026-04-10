@@ -19,6 +19,7 @@ func main() {
 	dest := flag.String("dest", "", "destination directory")
 	nameFlag := flag.String("name", "", "name of repository (sets zoekt.name)")
 	destNameFlag := flag.String("dest-name", "", "directory name for the bare repo under -dest (overrides -name for filesystem path)")
+	webURL := flag.String("web-url", "", "web-browsable URL for the repository (sets zoekt.web-url)")
 	flag.Parse()
 
 	if *dest == "" {
@@ -50,6 +51,18 @@ func main() {
 
 	config := map[string]string{
 		"zoekt.name": name,
+	}
+	webURLSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "web-url" {
+			webURLSet = true
+		}
+	})
+	if webURLSet {
+		// Explicit value (including empty to unset an existing web-url).
+		config["zoekt.web-url"] = *webURL
+	} else {
+		config["zoekt.web-url"] = u.String()
 	}
 
 	destRepo, err := gitindex.CloneRepo(destDir, filepath.Base(dirName), u.String(), config)

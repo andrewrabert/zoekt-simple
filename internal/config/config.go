@@ -63,6 +63,7 @@ type ConfigEntry struct {
 	Forks                  bool
 	Visibility             []string
 	GitURL                 string
+	WebURL                 *string
 }
 
 func Randomize(entries []ConfigEntry) []ConfigEntry {
@@ -369,8 +370,11 @@ func ExecuteMirror(cfg []ConfigEntry, repoDir string, notify func(repoDir string
 				"-dest", gitDest,
 				"-dest-name", destName,
 				"-name", displayName,
-				c.GitURL,
 			)
+			if c.WebURL != nil {
+				cmd.Args = append(cmd.Args, "-web-url", *c.WebURL)
+			}
+			cmd.Args = append(cmd.Args, c.GitURL)
 			// Bypass git rejecting repos owned by a different uid
 			cmd.Env = append(os.Environ(),
 				"GIT_CONFIG_COUNT=1",
