@@ -26,7 +26,19 @@ All configuration lives in a single YAML file. Set `ZOEKT_CONFIG` or pass `-conf
 
 ## MCP Tools
 
-**search** -- Search code across indexed repositories. Returns JSON with `total_matches`, `returned`, `truncated`, and `results`. Supports `output_mode` of `lines`, `files`, or `repos`.
+**search** -- Search code across indexed repositories. Returns JSON with `total_matches`, `returned`, `truncated`, and `results`. Supports `output_mode` of `lines`, `files`, `repos`, or `repos_detail`.
+
+`repos_detail` returns each repository with its indexed branches, the commit each was indexed at, and the index time:
+
+```json
+{"total_matches": 1, "returned": 1, "truncated": false,
+ "results": [{"name": "github.com/sourcegraph/zoekt",
+              "branches": [{"name": "main", "version": "2fb345a6c2e5..."}],
+              "latest_commit_date": "2026-04-01T09:00:00Z",
+              "index_time": "2026-04-02T20:32:30Z"}]}
+```
+
+This lets a client cache results derived from a repository and later check whether anything could have changed by comparing one commit SHA, instead of re-reading files.
 
 **get_file** -- Retrieve file contents from the index by hostname, repo, and path.
 
