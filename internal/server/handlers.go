@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,7 +21,7 @@ import (
 type searchArgs struct {
 	Query        string `json:"query" jsonschema:"Zoekt query string with optional filters (r: f: lang: sym: case:yes)"`
 	MaxResults   int    `json:"max_results,omitempty" jsonschema:"Maximum number of file matches to return (default: 50)"`
-	OutputMode   string `json:"output_mode,omitempty" jsonschema:"Output format: lines (default), files, or repos"`
+	OutputMode   string `json:"output_mode,omitempty" jsonschema:"Output format: lines (default), files, repos, or repos_detail"`
 	ContextLines int    `json:"context_lines,omitempty" jsonschema:"Number of context lines around matches (default: 0)"`
 }
 
@@ -56,27 +57,17 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 
 	// Use the List API for repos mode — Search results are capped by
 	// MaxDocDisplayCount and can silently omit repos with fewer file hits.
-	if outputMode == "repos" {
+	if outputMode == "repos" || outputMode == "repos_detail" {
 		repoList, err := a.searcher.List(ctx, q, nil)
 		if err != nil {
 			slog.Error("list failed", "query", args.Query, "error", err)
 			return nil, nil, fmt.Errorf("list failed: %v", err)
 		}
-		repos := make([]string, 0, len(repoList.Repos))
-		for _, r := range repoList.Repos {
-			repos = append(repos, r.Repository.Name)
-		}
-		sort.Strings(repos)
-		slog.Info("list complete", "query", args.Query, "repos", len(repos))
-		meta := map[string]any{
-			"total_matches": len(repos),
-			"returned":      len(repos),
-			"truncated":     false,
-			"results":       repos,
-		}
-		b, _ := json.Marshal(meta)
+		slog.Info("list complete", "query", args.Query, "repos", len(repoList.Repos), "output_mode", outputMode)
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: string(b)}},
+			Content: []mcp.Content{&mcp.TextContent{
+				Text: formatRepoList(repoList, outputMode == "repos_detail"),
+			}},
 		}, nil, nil
 	}
 
@@ -166,6 +157,65 @@ func sliceLines(content string, offset, limit int) string {
 		lines = lines[:limit]
 	}
 	return strings.Join(lines, "")
+}
+
+// --- JSON formatters ---
+
+// repoBranch is one indexed branch and the commit it was indexed at.
+type repoBranch struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// repoDetail is a repository plus the metadata needed to tell whether
+// anything indexed from it could have changed. Version is the commit the
+// branch was indexed at, so a caller holding results derived from this
+// repo can compare one SHA instead of re-reading files.
+type repoDetail struct {
+	Name             string       `json:"name"`
+	Branches         []repoBranch `json:"branches"`
+	LatestCommitDate time.Time    `json:"latest_commit_date"`
+	IndexTime        time.Time    `json:"index_time"`
+}
+
+// formatRepoList renders a List response. With detail, each repo carries
+// its indexed branches and timestamps; without, it stays the sorted list
+// of names that callers of output_mode=repos already parse.
+func formatRepoList(repoList *zoekt.RepoList, detail bool) string {
+	meta := map[string]any{
+		"total_matches": len(repoList.Repos),
+		"returned":      len(repoList.Repos),
+		"truncated":     false,
+	}
+
+	if !detail {
+		repos := make([]string, 0, len(repoList.Repos))
+		for _, r := range repoList.Repos {
+			repos = append(repos, r.Repository.Name)
+		}
+		sort.Strings(repos)
+		meta["results"] = repos
+		b, _ := json.Marshal(meta)
+		return string(b)
+	}
+
+	details := make([]repoDetail, 0, len(repoList.Repos))
+	for _, r := range repoList.Repos {
+		branches := make([]repoBranch, 0, len(r.Repository.Branches))
+		for _, b := range r.Repository.Branches {
+			branches = append(branches, repoBranch{Name: b.Name, Version: b.Version})
+		}
+		details = append(details, repoDetail{
+			Name:             r.Repository.Name,
+			Branches:         branches,
+			LatestCommitDate: r.Repository.LatestCommitDate,
+			IndexTime:        r.IndexMetadata.IndexTime,
+		})
+	}
+	sort.Slice(details, func(i, j int) bool { return details[i].Name < details[j].Name })
+	meta["results"] = details
+	b, _ := json.Marshal(meta)
+	return string(b)
 }
 
 // --- JSON formatter ---
