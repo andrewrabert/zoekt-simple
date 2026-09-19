@@ -1,6 +1,4 @@
-[private]
-default:
-    @just -l
+set default-list := true
 
 # Ensure git submodules are initialized
 [private]
