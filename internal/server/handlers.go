@@ -2,17 +2,15 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sourcegraph/zoekt"
+	"github.com/sourcegraph/zoekt-simple/internal/format"
 	"github.com/sourcegraph/zoekt/query"
 )
 
@@ -66,7 +64,7 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 		slog.Info("list complete", "query", args.Query, "repos", len(repoList.Repos), "output_mode", outputMode)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{
-				Text: formatRepoList(repoList, outputMode == "repos_detail"),
+				Text: format.RepoList(repoList, outputMode == "repos_detail"),
 			}},
 		}, nil, nil
 	}
@@ -85,7 +83,7 @@ func (a *app) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, args sea
 	slog.Info("search complete", "query", args.Query, "total", total, "returned", returned)
 
 	return &mcp.CallToolResult{
-		Content: []mcp.Content{&mcp.TextContent{Text: formatSearchResult(result, outputMode)}},
+		Content: []mcp.Content{&mcp.TextContent{Text: format.SearchResult(result, outputMode)}},
 	}, nil, nil
 }
 
@@ -157,156 +155,4 @@ func sliceLines(content string, offset, limit int) string {
 		lines = lines[:limit]
 	}
 	return strings.Join(lines, "")
-}
-
-// --- JSON formatters ---
-
-// repoBranch is one indexed branch and the commit it was indexed at.
-type repoBranch struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-// repoDetail is a repository plus the metadata needed to tell whether
-// anything indexed from it could have changed. Version is the commit the
-// branch was indexed at, so a caller holding results derived from this
-// repo can compare one SHA instead of re-reading files.
-type repoDetail struct {
-	Name             string       `json:"name"`
-	Branches         []repoBranch `json:"branches"`
-	LatestCommitDate time.Time    `json:"latest_commit_date"`
-	IndexTime        time.Time    `json:"index_time"`
-}
-
-// formatRepoList renders a List response. With detail, each repo carries
-// its indexed branches and timestamps; without, it stays the sorted list
-// of names that callers of output_mode=repos already parse.
-func formatRepoList(repoList *zoekt.RepoList, detail bool) string {
-	meta := map[string]any{
-		"total_matches": len(repoList.Repos),
-		"returned":      len(repoList.Repos),
-		"truncated":     false,
-	}
-
-	if !detail {
-		repos := make([]string, 0, len(repoList.Repos))
-		for _, r := range repoList.Repos {
-			repos = append(repos, r.Repository.Name)
-		}
-		sort.Strings(repos)
-		meta["results"] = repos
-		b, _ := json.Marshal(meta)
-		return string(b)
-	}
-
-	details := make([]repoDetail, 0, len(repoList.Repos))
-	for _, r := range repoList.Repos {
-		branches := make([]repoBranch, 0, len(r.Repository.Branches))
-		for _, b := range r.Repository.Branches {
-			branches = append(branches, repoBranch{Name: b.Name, Version: b.Version})
-		}
-		details = append(details, repoDetail{
-			Name:             r.Repository.Name,
-			Branches:         branches,
-			LatestCommitDate: r.Repository.LatestCommitDate,
-			IndexTime:        r.IndexMetadata.IndexTime,
-		})
-	}
-	sort.Slice(details, func(i, j int) bool { return details[i].Name < details[j].Name })
-	meta["results"] = details
-	b, _ := json.Marshal(meta)
-	return string(b)
-}
-
-// --- JSON formatter ---
-
-func formatSearchResult(result *zoekt.SearchResult, outputMode string) string {
-	files := result.Files
-	total := result.FileCount
-	if total == 0 {
-		total = len(files)
-	}
-
-	meta := map[string]any{
-		"total_matches": total,
-		"returned":      len(files),
-		"truncated":     total > len(files),
-	}
-
-	if outputMode == "files" {
-		seen := make(map[string]bool)
-		for _, f := range files {
-			seen[f.Repository+":"+f.FileName] = true
-		}
-		names := make([]string, 0, len(seen))
-		for p := range seen {
-			names = append(names, p)
-		}
-		sort.Strings(names)
-		meta["results"] = names
-		b, _ := json.Marshal(meta)
-		return string(b)
-	}
-
-	// lines mode
-	type ld struct {
-		num  int
-		text string
-	}
-	type pathEntry struct {
-		path  string
-		lines []ld
-	}
-
-	var order []string
-	pm := make(map[string]*pathEntry)
-	for _, f := range files {
-		path := f.Repository + ":" + f.FileName
-		pe, ok := pm[path]
-		if !ok {
-			pe = &pathEntry{path: path}
-			pm[path] = pe
-			order = append(order, path)
-		}
-		for _, m := range f.LineMatches {
-			pe.lines = append(pe.lines, ld{m.LineNumber, strings.TrimRight(string(m.Line), "\n")})
-		}
-	}
-
-	results := make(map[string]map[string]string)
-	for _, path := range order {
-		pe := pm[path]
-		if len(pe.lines) == 0 {
-			continue
-		}
-		sort.Slice(pe.lines, func(i, j int) bool { return pe.lines[i].num < pe.lines[j].num })
-
-		ranges := make(map[string]string)
-		start, end := pe.lines[0].num, pe.lines[0].num
-		texts := []string{pe.lines[0].text}
-		for _, l := range pe.lines[1:] {
-			if l.num == end+1 {
-				end = l.num
-				texts = append(texts, l.text)
-			} else {
-				key := fmt.Sprintf("%d", start)
-				if start != end {
-					key = fmt.Sprintf("%d-%d", start, end)
-				}
-				ranges[key] = strings.Join(texts, "\n")
-				start, end = l.num, l.num
-				texts = []string{l.text}
-			}
-		}
-		key := fmt.Sprintf("%d", start)
-		if start != end {
-			key = fmt.Sprintf("%d-%d", start, end)
-		}
-		ranges[key] = strings.Join(texts, "\n")
-		results[path] = ranges
-	}
-
-	meta["results"] = results
-	b, _ := json.Marshal(meta)
-	return string(b)
 }

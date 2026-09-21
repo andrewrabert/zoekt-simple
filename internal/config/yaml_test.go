@@ -84,8 +84,8 @@ func TestConvertGitHubMirror(t *testing.T) {
 	t.Setenv("GH_TOKEN", "tok")
 	entries, cleanup, err := ConvertMirrors([]MirrorEntry{
 		{GitHub: &GitHubMirror{
-			Org:        "myorg",
-			Token:      "${GH_TOKEN}",
+			Org:      "myorg",
+			Token:    "${GH_TOKEN}",
 			Archived: false,
 		}},
 	})
