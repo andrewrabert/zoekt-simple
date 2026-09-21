@@ -12,7 +12,10 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/sourcegraph/zoekt"
+	"github.com/sourcegraph/zoekt-simple/internal/format"
 	"github.com/sourcegraph/zoekt/query"
 )
 
@@ -107,15 +110,24 @@ var httpClient = &http.Client{
 // List API
 
 type listResponse struct {
-	List struct {
-		Repos []listRepoEntry `json:"Repos"`
-	} `json:"List"`
+	List zoekt.RepoList `json:"List"`
 }
 
-type listRepoEntry struct {
-	Repository struct {
-		Name string `json:"Name"`
-	} `json:"Repository"`
+// formatRepoDetailsPlain writes one tab-separated row per indexed branch.
+func formatRepoDetailsPlain(repoList *zoekt.RepoList) string {
+	var rows []string
+	for _, d := range format.RepoDetails(repoList) {
+		commit := d.LatestCommitDate.UTC().Format(time.RFC3339)
+		indexed := d.IndexTime.UTC().Format(time.RFC3339)
+		if len(d.Branches) == 0 {
+			rows = append(rows, strings.Join([]string{d.Name, "", "", commit, indexed}, "\t"))
+			continue
+		}
+		for _, b := range d.Branches {
+			rows = append(rows, strings.Join([]string{d.Name, b.Name, b.Version, commit, indexed}, "\t"))
+		}
+	}
+	return strings.Join(rows, "\n")
 }
 
 func listRepos(baseURL, query string) (*listResponse, error) {
@@ -151,7 +163,7 @@ func search(baseURL, query string, maxResults, contextLines int) (*searchRespons
 		"Q": query,
 		"Opts": map[string]any{
 			"MaxDocDisplayCount": maxResults,
-			"NumContextLines":   contextLines,
+			"NumContextLines":    contextLines,
 		},
 	}
 	data, err := json.Marshal(body)
@@ -503,7 +515,7 @@ func main() {
 	flag.IntVar(&maxResults, "n", 50, "Maximum number of file matches")
 	flag.IntVar(&maxResults, "max-results", 50, "Maximum number of file matches")
 	flag.BoolVar(&jsonOutput, "json", false, "Output results as JSON")
-	flag.StringVar(&outputMode, "output-mode", "lines", "Output format: lines, files, repos")
+	flag.StringVar(&outputMode, "output-mode", "lines", "Output format: lines, files, repos, repos_detail")
 	flag.BoolVar(&filesWithMatches, "l", false, "Only print file paths with matches")
 	flag.BoolVar(&filesWithMatches, "files-with-matches", false, "Only print file paths with matches")
 	flag.IntVar(&contextLines, "C", 0, "Context lines around matches")
@@ -546,30 +558,30 @@ func main() {
 		outputMode = "repos"
 	}
 
-	if outputMode == "repos" && isRepoOnlyQuery(query) {
+	// List is the only source of per-branch indexed commits.
+	detail := outputMode == "repos_detail"
+	if detail || (outputMode == "repos" && isRepoOnlyQuery(query)) {
 		listResp, err := listRepos(url, query)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(2)
 		}
-		repos := make([]string, len(listResp.List.Repos))
-		for i, r := range listResp.List.Repos {
-			repos[i] = r.Repository.Name
-		}
-		sort.Strings(repos)
-		if len(repos) == 0 {
+		repoList := &listResp.List
+		if len(repoList.Repos) == 0 {
 			os.Exit(1)
 		}
-		if jsonOutput {
-			b, _ := json.Marshal(map[string]any{
-				"total_matches": len(repos),
-				"returned":      len(repos),
-				"truncated":     false,
-				"results":       repos,
-			})
-			fmt.Println(string(b))
-		} else {
-			fmt.Println(strings.Join(repos, "\n"))
+		switch {
+		case jsonOutput:
+			fmt.Println(format.RepoList(repoList, detail))
+		case detail:
+			fmt.Println(formatRepoDetailsPlain(repoList))
+		default:
+			names := make([]string, len(repoList.Repos))
+			for i, r := range repoList.Repos {
+				names[i] = r.Repository.Name
+			}
+			sort.Strings(names)
+			fmt.Println(strings.Join(names, "\n"))
 		}
 		return
 	}

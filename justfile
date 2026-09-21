@@ -74,6 +74,14 @@ search *args="": build ensure-env
 get-file *args="": build ensure-env
     ./build/zoekt-get-file "$@"
 
+# Format Go source
+fmt:
+    gofmt -w cmd internal
+
+# Run go vet
+vet:
+    go vet ./...
+
 # Run tests
 [positional-arguments]
 test *args="":

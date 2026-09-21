@@ -16,17 +16,17 @@ import (
 )
 
 type YAMLConfig struct {
-	Listen         string        `yaml:"listen"`
-	DataDir        string        `yaml:"data_dir"`
-	IndexDir       string        `yaml:"index_dir"`
-	FetchInterval  time.Duration `yaml:"fetch_interval"`
-	MirrorInterval time.Duration `yaml:"mirror_interval"`
-	IndexTimeout   time.Duration `yaml:"index_timeout"`
-	CPUFraction    float64       `yaml:"cpu_fraction"`
-	MaxLogAge      time.Duration `yaml:"max_log_age"`
-	Branches       map[string][]string `yaml:"branches"`
-	Instructions   string        `yaml:"instructions"`
-	InstrFile      string        `yaml:"instructions_file"`
+	Listen         string                 `yaml:"listen"`
+	DataDir        string                 `yaml:"data_dir"`
+	IndexDir       string                 `yaml:"index_dir"`
+	FetchInterval  time.Duration          `yaml:"fetch_interval"`
+	MirrorInterval time.Duration          `yaml:"mirror_interval"`
+	IndexTimeout   time.Duration          `yaml:"index_timeout"`
+	CPUFraction    float64                `yaml:"cpu_fraction"`
+	MaxLogAge      time.Duration          `yaml:"max_log_age"`
+	Branches       map[string][]string    `yaml:"branches"`
+	Instructions   string                 `yaml:"instructions"`
+	InstrFile      string                 `yaml:"instructions_file"`
 	DefaultIndex   string                 `yaml:"default_index"`
 	Indexes        map[string]IndexConfig `yaml:"indexes"`
 	Mirrors        []MirrorEntry          `yaml:"mirrors"`
@@ -89,23 +89,23 @@ type MirrorEntry struct {
 }
 
 type GitHubMirror struct {
-	Org          string   `yaml:"org"`
-	User         string   `yaml:"user"`
-	Orgs         []string `yaml:"orgs"`
-	Users        []string `yaml:"users"`
-	URL          string   `yaml:"url"`
-	Token        string   `yaml:"token"`
-	Name         string   `yaml:"name"`
-	ExcludeRepos string   `yaml:"exclude_repos"`
-	Topics       []string `yaml:"topics"`
+	Org           string   `yaml:"org"`
+	User          string   `yaml:"user"`
+	Orgs          []string `yaml:"orgs"`
+	Users         []string `yaml:"users"`
+	URL           string   `yaml:"url"`
+	Token         string   `yaml:"token"`
+	Name          string   `yaml:"name"`
+	ExcludeRepos  string   `yaml:"exclude_repos"`
+	Topics        []string `yaml:"topics"`
 	ExcludeTopics []string `yaml:"exclude_topics"`
-	Visibility   []string `yaml:"visibility"`
-	Archived     bool     `yaml:"archived"`
-	Forks        bool     `yaml:"forks"`
-	KeepDeleted  bool     `yaml:"keep_deleted"`
-	DiscoverOrgs bool     `yaml:"discover_orgs"`
-	Include      []string `yaml:"include"`
-	Exclude      []string `yaml:"exclude"`
+	Visibility    []string `yaml:"visibility"`
+	Archived      bool     `yaml:"archived"`
+	Forks         bool     `yaml:"forks"`
+	KeepDeleted   bool     `yaml:"keep_deleted"`
+	DiscoverOrgs  bool     `yaml:"discover_orgs"`
+	Include       []string `yaml:"include"`
+	Exclude       []string `yaml:"exclude"`
 }
 
 type GitLabMirror struct {

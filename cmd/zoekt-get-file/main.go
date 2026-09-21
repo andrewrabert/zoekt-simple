@@ -12,8 +12,8 @@ import (
 
 func main() {
 	var (
-		offset int
-		limit  int
+		offset  int
+		limit   int
 		baseURL string
 	)
 	flag.IntVar(&offset, "offset", 0, "Skip first N lines")
