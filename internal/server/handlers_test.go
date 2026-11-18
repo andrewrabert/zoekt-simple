@@ -1,11 +1,16 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sourcegraph/zoekt"
+	"github.com/sourcegraph/zoekt/index"
+	"github.com/sourcegraph/zoekt/search"
 )
 
 func TestFormatSearchResultFilesMode(t *testing.T) {
@@ -51,6 +56,95 @@ func TestFormatSearchResultLinesMode(t *testing.T) {
 	if _, ok := results["repo:a.go"]; !ok {
 		t.Fatal("expected repo:a.go in results")
 	}
+}
+
+func indexedSearcher(t *testing.T, content string) zoekt.Streamer {
+	t.Helper()
+	dir := t.TempDir()
+	builder, err := index.NewBuilder(index.Options{
+		IndexDir:              dir,
+		RepositoryDescription: zoekt.Repository{Name: "repo"},
+		DisableCTags:          true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.AddFile("a.txt", []byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	searcher, err := search.NewDirectorySearcher(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(searcher.Close)
+	return searcher
+}
+
+func searchLines(t *testing.T, content string, contextLines int) map[string]string {
+	t.Helper()
+	a := &app{searcher: indexedSearcher(t, content)}
+	result, _, err := a.handleSearch(context.Background(), nil, searchArgs{Query: "needle", ContextLines: contextLines})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Results map[string]map[string]string `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Results["repo:a.txt"]
+}
+
+func assertLines(t *testing.T, got, want map[string]string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestSearchWithoutContextLinesReturnsOnlyMatches(t *testing.T) {
+	got := searchLines(t, "one\ntwo\nneedle three\nfour\nfive\n", 0)
+	assertLines(t, got, map[string]string{"3": "needle three"})
+}
+
+func TestSearchContextLinesSurroundMatch(t *testing.T) {
+	got := searchLines(t, "one\ntwo\nneedle three\nfour\nfive\n", 1)
+	assertLines(t, got, map[string]string{"2-4": "two\nneedle three\nfour"})
+}
+
+func TestSearchContextLinesMergeOverlappingMatches(t *testing.T) {
+	got := searchLines(t, "one\ntwo\nneedle three\nfour\nneedle five\nsix\nseven\neight\n", 2)
+	assertLines(t, got, map[string]string{"1-7": "one\ntwo\nneedle three\nfour\nneedle five\nsix\nseven"})
+}
+
+func TestSearchContextLinesMergeAdjacentContext(t *testing.T) {
+	got := searchLines(t, "one\nneedle two\nthree\nfour\nneedle five\nsix\n", 1)
+	assertLines(t, got, map[string]string{"1-6": "one\nneedle two\nthree\nfour\nneedle five\nsix"})
+}
+
+func TestSearchContextLinesKeepDistantMatchesApart(t *testing.T) {
+	got := searchLines(t, "one\nneedle two\nthree\nfour\nfive\nneedle six\nseven\n", 1)
+	assertLines(t, got, map[string]string{
+		"1-3": "one\nneedle two\nthree",
+		"5-7": "five\nneedle six\nseven",
+	})
+}
+
+func TestSearchContextLinesStopAtFileBoundaries(t *testing.T) {
+	got := searchLines(t, "needle one\ntwo\nthree\nfour\nfive\nsix\nneedle seven", 2)
+	assertLines(t, got, map[string]string{
+		"1-3": "needle one\ntwo\nthree",
+		"5-7": "five\nsix\nneedle seven",
+	})
+}
+
+func TestSearchContextLinesKeepBlankLines(t *testing.T) {
+	got := searchLines(t, "one\n\nneedle three\n\nfive\n", 1)
+	assertLines(t, got, map[string]string{"2-4": "\nneedle three\n"})
 }
 
 func repoList() *zoekt.RepoList {

@@ -28,6 +28,13 @@ All configuration lives in a single YAML file. Set `ZOEKT_CONFIG` or pass `-conf
 
 **search** -- Search code across indexed repositories. Returns JSON with `total_matches`, `returned`, `truncated`, and `results`. Supports `output_mode` of `lines`, `files`, `repos`, or `repos_detail`.
 
+In `lines` mode, `results` maps each `repo:path` to its matching lines keyed by line number, with consecutive lines merged into a `start-end` range. `context_lines` adds that many lines before and after each match to the same ranges. A match on line 10 with `context_lines` of 1:
+
+```json
+{"total_matches": 1, "returned": 1, "truncated": false,
+ "results": {"github.com/myorg/myrepo:src/main.go": {"9-11": "// main starts the server.\nfunc main() {\n\tserve()"}}}
+```
+
 `repos_detail` returns each repository with its indexed branches, the commit each was indexed at, and the index time:
 
 ```json
