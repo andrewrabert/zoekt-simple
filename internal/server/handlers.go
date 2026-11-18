@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -254,8 +255,9 @@ func formatSearchResult(result *zoekt.SearchResult, outputMode string) string {
 		text string
 	}
 	type pathEntry struct {
-		path  string
-		lines []ld
+		path    string
+		lines   []ld
+		context map[int]string
 	}
 
 	var order []string
@@ -264,12 +266,13 @@ func formatSearchResult(result *zoekt.SearchResult, outputMode string) string {
 		path := f.Repository + ":" + f.FileName
 		pe, ok := pm[path]
 		if !ok {
-			pe = &pathEntry{path: path}
+			pe = &pathEntry{path: path, context: make(map[int]string)}
 			pm[path] = pe
 			order = append(order, path)
 		}
 		for _, m := range f.LineMatches {
 			pe.lines = append(pe.lines, ld{m.LineNumber, strings.TrimRight(string(m.Line), "\n")})
+			maps.Copy(pe.context, contextLines(m))
 		}
 	}
 
@@ -278,6 +281,12 @@ func formatSearchResult(result *zoekt.SearchResult, outputMode string) string {
 		pe := pm[path]
 		if len(pe.lines) == 0 {
 			continue
+		}
+		for _, line := range pe.lines {
+			delete(pe.context, line.num)
+		}
+		for num, text := range pe.context {
+			pe.lines = append(pe.lines, ld{num, text})
 		}
 		sort.Slice(pe.lines, func(i, j int) bool { return pe.lines[i].num < pe.lines[j].num })
 
@@ -309,4 +318,23 @@ func formatSearchResult(result *zoekt.SearchResult, outputMode string) string {
 	meta["results"] = results
 	b, _ := json.Marshal(meta)
 	return string(b)
+}
+
+func contextLines(match zoekt.LineMatch) map[int]string {
+	before := splitLines(match.Before)
+	lines := make(map[int]string)
+	for i, text := range before {
+		lines[match.LineNumber-len(before)+i] = text
+	}
+	for i, text := range splitLines(match.After) {
+		lines[match.LineNumber+1+i] = text
+	}
+	return lines
+}
+
+func splitLines(content []byte) []string {
+	if len(content) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 }
