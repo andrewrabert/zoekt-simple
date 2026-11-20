@@ -1,5 +1,5 @@
 # Stage 1: Build all Go binaries
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 ENV CGO_ENABLED=0
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -12,7 +12,7 @@ WORKDIR /app/zoekt
 RUN go install ./cmd/...
 
 # Stage 2: Final image
-FROM alpine:3.23
+FROM alpine:3.24
 
 RUN apk add --no-cache \
     git ca-certificates jansson ctags tini \
