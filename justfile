@@ -56,7 +56,7 @@ docker-run tag="zoekt-simple:latest" *args="":
 # Run the server
 [group: "run"]
 [positional-arguments]
-server *args="": build ensure-env ensure-config
+server *args: build ensure-env ensure-config
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="{{justfile_directory()}}/build:$PATH"
@@ -65,16 +65,16 @@ server *args="": build ensure-env ensure-config
 # Search the running server
 [group: "run"]
 [positional-arguments]
-search *args="": build ensure-env
+search *args: build ensure-env
     ./build/zoekt-search "$@"
 
 # Get a file from the running server
 [group: "run"]
 [positional-arguments]
-get-file *args="": build ensure-env
+get-file *args: build ensure-env
     ./build/zoekt-get-file "$@"
 
 # Run tests
 [positional-arguments]
-test *args="":
+test *args:
     go test "$@" ./...
